@@ -1,0 +1,120 @@
+name: Reusable — Repo events to Discord
+
+on:
+  workflow_call:
+    secrets:
+      DISCORD_WEBHOOK_URL:
+        required: true
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compose and send
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          EVENT_JSON: ${{ toJSON(github.event) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+
+          event = os.environ["EVENT_NAME"]
+          action = os.environ["ACTION"]
+          repo = os.environ["REPO"]
+          actor = os.environ["ACTOR"]
+          data = json.loads(os.environ["EVENT_JSON"])
+
+          # Color palette
+          COLOR_OPEN    = 3447003    # blue
+          COLOR_CLOSED  = 9807270    # grey
+          COLOR_MERGED  = 10181046   # purple
+          COLOR_RELEASE = 3066993    # green
+          COLOR_FAIL    = 15158332   # red
+          COLOR_DEFAULT = 7506394    # slate
+
+          title = f"{event}.{action} in {repo}"
+          url = f"https://github.com/{repo}"
+          color = COLOR_DEFAULT
+          desc_lines = [f"Actor: `{actor}`"]
+
+          if event == "issues":
+              issue = data.get("issue", {})
+              title = f"🐛 Issue {action}: #{issue.get('number')} — {issue.get('title', '')[:200]}"
+              url = issue.get("html_url", url)
+              color = COLOR_OPEN if action == "opened" else COLOR_CLOSED
+              body = (issue.get("body") or "").strip()[:500]
+              if body:
+                  desc_lines.append(body)
+              labels = ", ".join(l["name"] for l in issue.get("labels", []))
+              if labels:
+                  desc_lines.append(f"Labels: {labels}")
+
+          elif event == "pull_request":
+              pr = data.get("pull_request", {})
+              merged = pr.get("merged", False)
+              verb = "merged" if merged else action
+              title = f"🔀 PR {verb}: #{pr.get('number')} — {pr.get('title', '')[:200]}"
+              url = pr.get("html_url", url)
+              if merged:
+                  color = COLOR_MERGED
+              elif action == "opened":
+                  color = COLOR_OPEN
+              else:
+                  color = COLOR_CLOSED
+              body = (pr.get("body") or "").strip()[:500]
+              if body:
+                  desc_lines.append(body)
+              desc_lines.append(f"{pr.get('additions', 0)} additions / {pr.get('deletions', 0)} deletions")
+
+          elif event == "release":
+              rel = data.get("release", {})
+              title = f"🚀 Release {action}: {rel.get('tag_name', '?')}"
+              url = rel.get("html_url", url)
+              color = COLOR_RELEASE
+              body = (rel.get("body") or "").strip()[:1500]
+              if body:
+                  desc_lines.append(body)
+
+          elif event == "discussion":
+              disc = data.get("discussion", {})
+              title = f"💬 Discussion {action}: {disc.get('title', '')[:200]}"
+              url = disc.get("html_url", url)
+              color = COLOR_OPEN
+
+          elif event == "workflow_run":
+              run = data.get("workflow_run", {})
+              conclusion = run.get("conclusion", "?")
+              if conclusion in ("success", None):
+                  raise SystemExit(0)  # only notify on failures
+              title = f"⚙️ Workflow failed: {run.get('name', '?')}"
+              url = run.get("html_url", url)
+              color = COLOR_FAIL
+              desc_lines.append(f"Conclusion: `{conclusion}` on branch `{run.get('head_branch')}`")
+
+          else:
+              # Unknown event — still notify with minimal info
+              desc_lines.append(f"Unhandled event: {event}.{action}")
+
+          payload = {
+              "embeds": [{
+                  "title": title[:256],
+                  "description": "\n\n".join(desc_lines)[:4096],
+                  "color": color,
+                  "url": url,
+                  "footer": {"text": f"{repo}"},
+              }]
+          }
+
+          req = urllib.request.Request(
+              os.environ["WEBHOOK"],
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+          )
+          with urllib.request.urlopen(req, timeout=15) as r:
+              print("discord:", r.status)
+          PY
+        shell: bash

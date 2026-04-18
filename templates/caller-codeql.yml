@@ -1,0 +1,17 @@
+# Drop into .github/workflows/codeql.yml of any code repo.
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 3'  # Wednesdays
+
+jobs:
+  analyze:
+    uses: chodeus/chodeus-ops/workflows/codeql.yml@main
+    with:
+      languages: '["python"]'  # ["python"], ["javascript"], ["csharp"], or multiple

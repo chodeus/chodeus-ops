@@ -1,0 +1,43 @@
+name: Reusable — CodeQL
+
+on:
+  workflow_call:
+    inputs:
+      languages:
+        description: 'JSON array of languages, e.g. ["python","javascript"]'
+        required: true
+        type: string
+      queries:
+        required: false
+        type: string
+        default: 'security-extended,security-and-quality'
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(inputs.languages) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Init CodeQL
+        uses: github/codeql-action/init@4e828ff8d448a8a6e532957b1811f387a63867e8 # v3.29.4
+        with:
+          languages: ${{ matrix.language }}
+          queries: ${{ inputs.queries }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@4e828ff8d448a8a6e532957b1811f387a63867e8 # v3.29.4
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@4e828ff8d448a8a6e532957b1811f387a63867e8 # v3.29.4
+        with:
+          category: /language:${{ matrix.language }}

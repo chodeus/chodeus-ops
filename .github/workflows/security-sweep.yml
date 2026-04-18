@@ -1,0 +1,53 @@
+name: Security sweep
+
+on:
+  schedule:
+    - cron: '0 16 * * 1'  # Mondays 09:00 America/Los_Angeles (16:00 UTC)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  security-events: read
+
+jobs:
+  alerts:
+    runs-on: ubuntu-latest
+    outputs:
+      summary: ${{ steps.scan.outputs.summary }}
+      critical: ${{ steps.scan.outputs.critical }}
+      high: ${{ steps.scan.outputs.high }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Aggregate Dependabot alerts
+        id: scan
+        env:
+          GH_TOKEN: ${{ secrets.DIGEST_TOKEN || secrets.GITHUB_TOKEN }}
+          OWNER: chodeus
+          REPOS: BeatsCheck,orpheusmorebetter,chub,sleezer,folder.view3
+        run: |
+          python3 scripts/dependency_report.py --owner "$OWNER" --repos "$REPOS" --output summary.json
+          python3 -c "
+          import json
+          d = json.load(open('summary.json'))
+          crit = sum(r['critical'] for r in d['repos'])
+          high = sum(r['high'] for r in d['repos'])
+          print(f'critical={crit}')
+          print(f'high={high}')
+          " >> "$GITHUB_OUTPUT"
+          echo "summary<<EOF" >> "$GITHUB_OUTPUT"
+          python3 scripts/dependency_report.py --owner "$OWNER" --repos "$REPOS" --format markdown >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+  notify:
+    needs: alerts
+    uses: ./workflows/notify-discord.yml
+    with:
+      event_type: security
+      status: ${{ needs.alerts.outputs.critical != '0' && 'failure' || (needs.alerts.outputs.high != '0' && 'warning' || 'success') }}
+      critical_vulns: ${{ needs.alerts.outputs.critical }}
+      high_vulns: ${{ needs.alerts.outputs.high }}
+      title: "🔍 Weekly security sweep"
+      description: ${{ needs.alerts.outputs.summary }}
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

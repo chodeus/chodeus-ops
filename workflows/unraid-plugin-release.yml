@@ -1,0 +1,65 @@
+name: Reusable — Unraid plugin release
+
+on:
+  workflow_call:
+    inputs:
+      plg_file:
+        description: 'Path to .plg file relative to repo root.'
+        required: true
+        type: string
+      txz_source_dir:
+        description: 'Directory that will be packed into .txz (must contain usr/, etc/, etc).'
+        required: true
+        type: string
+      plugin_name:
+        description: 'Short plugin name (e.g. folder.view3) — used for .txz filename.'
+        required: true
+        type: string
+      version:
+        description: 'Version string. If empty, uses YYYY.MM.DD from commit date.'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        run: |
+          V="${{ inputs.version }}"
+          if [ -z "$V" ]; then V=$(date -u +%Y.%m.%d); fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Build .txz package
+        id: pack
+        run: |
+          set -e
+          TXZ="${{ inputs.plugin_name }}-${{ steps.ver.outputs.version }}.txz"
+          tar -C "${{ inputs.txz_source_dir }}" -cJf "$TXZ" .
+          MD5=$(md5sum "$TXZ" | awk '{print $1}')
+          echo "txz=$TXZ" >> "$GITHUB_OUTPUT"
+          echo "md5=$MD5" >> "$GITHUB_OUTPUT"
+
+      - name: Inject MD5 + version into .plg
+        run: |
+          sed -i "s|{{VERSION}}|${{ steps.ver.outputs.version }}|g; s|{{MD5}}|${{ steps.pack.outputs.md5 }}|g" "${{ inputs.plg_file }}"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05083c923dcd9095 # v2.2.2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: v${{ steps.ver.outputs.version }}
+          files: |
+            ${{ inputs.plg_file }}
+            ${{ steps.pack.outputs.txz }}
+          generate_release_notes: true

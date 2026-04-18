@@ -1,0 +1,37 @@
+name: Reusable — Stale issues & PRs
+
+on:
+  workflow_call:
+    inputs:
+      days_before_stale:
+        required: false
+        type: number
+        default: 60
+      days_before_close:
+        required: false
+        type: number
+        default: 14
+      exempt_labels:
+        required: false
+        type: string
+        default: 'pinned,security,blocked'
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639 # v9.1.0
+        with:
+          days-before-stale: ${{ inputs.days_before_stale }}
+          days-before-close: ${{ inputs.days_before_close }}
+          exempt-issue-labels: ${{ inputs.exempt_labels }}
+          exempt-pr-labels: ${{ inputs.exempt_labels }}
+          stale-issue-message: 'No activity in ${{ inputs.days_before_stale }} days — marking stale. Will close in ${{ inputs.days_before_close }} days unless updated.'
+          stale-pr-message: 'No activity in ${{ inputs.days_before_stale }} days — marking stale. Will close in ${{ inputs.days_before_close }} days unless updated.'
+          stale-issue-label: 'stale'
+          stale-pr-label: 'stale'
+          remove-stale-when-updated: true

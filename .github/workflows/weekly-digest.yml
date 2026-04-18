@@ -1,0 +1,60 @@
+name: Weekly portfolio digest
+
+on:
+  schedule:
+    - cron: '0 15 * * 1'  # Mondays 08:00 America/Los_Angeles (15:00 UTC)
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout chodeus-ops
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Generate digest
+        id: gen
+        env:
+          # DIGEST_TOKEN is a PAT with `security_events` + `repo` scopes — needed to read
+          # Dependabot alerts across the portfolio. Falls back to GITHUB_TOKEN (local repo only).
+          GH_TOKEN: ${{ secrets.DIGEST_TOKEN || secrets.GITHUB_TOKEN }}
+          REPOS: BeatsCheck,orpheusmorebetter,chub,sleezer,folder.view3
+          OWNER: chodeus
+        run: |
+          python3 scripts/digest.py --owner "$OWNER" --repos "$REPOS" --format github-issue > digest.md
+          {
+            echo "body<<EOF"
+            cat digest.md
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upsert digest issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BODY: ${{ steps.gen.outputs.body }}
+        run: |
+          set -e
+          WEEK=$(date -u +"%Y-W%V")
+          TITLE="Weekly digest — $WEEK"
+          # Find an existing open digest issue (we use label=digest as the single pinned thread)
+          NUM=$(gh issue list --label digest --state open --limit 1 --json number --jq '.[0].number' || true)
+          if [ -z "$NUM" ] || [ "$NUM" = "null" ]; then
+            gh issue create --title "$TITLE" --label digest --body "$BODY"
+          else
+            gh issue edit "$NUM" --title "$TITLE" --body "$BODY"
+          fi
+
+  notify:
+    needs: digest
+    uses: ./workflows/notify-discord.yml
+    with:
+      event_type: workflow
+      status: success
+      title: "📊 Weekly digest updated"
+      description: "See the digest issue in chodeus-ops for open alerts, failing workflows, stale PRs, and outdated base images."
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

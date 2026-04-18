@@ -1,0 +1,15 @@
+# Drop into .github/workflows/ci.yml of a Python repo.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  ci:
+    uses: chodeus/chodeus-ops/workflows/python-ci.yml@main
+    with:
+      python_versions: '["3.12"]'

@@ -1,0 +1,12 @@
+# Drop into .github/workflows/stale.yml of any repo.
+
+name: Stale issues & PRs
+
+on:
+  schedule:
+    - cron: '0 5 * * *'  # daily
+  workflow_dispatch:
+
+jobs:
+  stale:
+    uses: chodeus/chodeus-ops/workflows/stale-issues.yml@main

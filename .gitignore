@@ -1,0 +1,10 @@
+.DS_Store
+*.pyc
+__pycache__/
+.venv/
+.env
+.env.local
+*.log
+
+# Local-only docs (not published to the public repo)
+local/

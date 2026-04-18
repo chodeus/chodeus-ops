@@ -1,0 +1,32 @@
+# Drop into .github/workflows/release.yml of an Unraid plugin repo.
+
+name: Release plugin
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (YYYY.MM.DD). Leave blank for today.'
+        required: false
+
+jobs:
+  release:
+    uses: chodeus/chodeus-ops/workflows/unraid-plugin-release.yml@main
+    with:
+      plg_file: plugin/folder.view3.plg
+      txz_source_dir: source
+      plugin_name: folder.view3
+      version: ${{ github.event.inputs.version }}
+    secrets: inherit
+
+  notify:
+    if: always()
+    needs: release
+    uses: chodeus/chodeus-ops/workflows/notify-discord.yml@main
+    with:
+      event_type: release
+      status: ${{ needs.release.result == 'success' && 'success' || 'failure' }}
+      commit_sha: ${{ github.sha }}
+    secrets: inherit

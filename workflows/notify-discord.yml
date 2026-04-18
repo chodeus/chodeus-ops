@@ -1,0 +1,135 @@
+name: Reusable — Discord notification
+
+on:
+  workflow_call:
+    inputs:
+      event_type:
+        description: 'Type of event (build, sync, security, release, issue, pr, workflow).'
+        required: true
+        type: string
+      status:
+        description: 'Status (success, failure, info, warning, skipped).'
+        required: true
+        type: string
+      title:
+        description: 'Title override (auto-generated if empty).'
+        required: false
+        type: string
+        default: ''
+      description:
+        description: 'Description override (auto-generated if empty).'
+        required: false
+        type: string
+        default: ''
+      url:
+        description: 'Link shown in the embed (defaults to the workflow run).'
+        required: false
+        type: string
+        default: ''
+      commit_sha:
+        required: false
+        type: string
+        default: ''
+      image_tag:
+        required: false
+        type: string
+        default: ''
+      critical_vulns:
+        required: false
+        type: string
+        default: '0'
+      high_vulns:
+        required: false
+        type: string
+        default: '0'
+    secrets:
+      DISCORD_WEBHOOK_URL:
+        required: true
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compose and send
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          EVENT: ${{ inputs.event_type }}
+          STATUS: ${{ inputs.status }}
+          IN_TITLE: ${{ inputs.title }}
+          IN_DESC: ${{ inputs.description }}
+          IN_URL: ${{ inputs.url }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          CRIT: ${{ inputs.critical_vulns }}
+          HIGH: ${{ inputs.high_vulns }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -e
+
+          case "$EVENT" in
+            build)    BASE="🐳 Container build" ;;
+            sync)     BASE="🔄 Repository sync" ;;
+            security) BASE="🔍 Security scan" ;;
+            release)  BASE="🚀 Release" ;;
+            issue)    BASE="🐛 Issue" ;;
+            pr)       BASE="🔀 Pull request" ;;
+            workflow) BASE="⚙️ Workflow" ;;
+            *)        BASE="ℹ️ Notification" ;;
+          esac
+
+          case "$STATUS" in
+            success) SUFFIX="success"; COLOR=3066993 ;;
+            failure) SUFFIX="failed";  COLOR=15158332 ;;
+            warning) SUFFIX="warning"; COLOR=15105570 ;;
+            skipped) SUFFIX="skipped"; COLOR=9807270 ;;
+            *)       SUFFIX="info";    COLOR=3447003 ;;
+          esac
+
+          if [ -n "$IN_TITLE" ]; then TITLE="$IN_TITLE"; else TITLE="$BASE — $SUFFIX"; fi
+
+          if [ -n "$IN_DESC" ]; then
+            DESC="$IN_DESC"
+          else
+            case "$EVENT" in
+              build)    DESC="Docker build $SUFFIX for \`$REPO\`." ;;
+              sync)     DESC="Upstream sync $SUFFIX for \`$REPO\`." ;;
+              security) DESC="Security scan $SUFFIX. Critical: $CRIT, High: $HIGH." ;;
+              release)  DESC="Release $SUFFIX for \`$REPO\`." ;;
+              *)        DESC="Event from \`$REPO\` by \`$ACTOR\`." ;;
+            esac
+          fi
+
+          if [ -n "$COMMIT_SHA" ]; then
+            SHORT="${COMMIT_SHA:0:7}"
+            DESC=$(printf '%s\n\n📝 Commit: [`%s`](https://github.com/%s/commit/%s)' "$DESC" "$SHORT" "$REPO" "$COMMIT_SHA")
+          fi
+          if [ -n "$IMAGE_TAG" ]; then
+            DESC=$(printf '%s\n🏷 Image: `%s`' "$DESC" "$IMAGE_TAG")
+          fi
+
+          if [ -n "$IN_URL" ]; then LINK="$IN_URL"; else LINK="$RUN_URL"; fi
+
+          export TITLE DESC COLOR LINK
+
+          python3 - <<'PY'
+          import json, os, urllib.request
+          payload = {
+              "embeds": [{
+                  "title": os.environ["TITLE"][:256],
+                  "description": os.environ["DESC"][:4096],
+                  "color": int(os.environ["COLOR"]),
+                  "url": os.environ["LINK"],
+                  "footer": {"text": f"{os.environ['REPO']} · {os.environ['ACTOR']}"},
+              }]
+          }
+          req = urllib.request.Request(
+              os.environ["WEBHOOK"],
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+          )
+          with urllib.request.urlopen(req, timeout=15) as r:
+              print("discord:", r.status)
+          PY
+        shell: bash

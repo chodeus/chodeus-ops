@@ -1,0 +1,30 @@
+# Drop into .github/workflows/docker-publish.yml of a Docker repo.
+# Calls the reusable build workflow in chodeus-ops; Discord notifications via secrets: inherit.
+
+name: Docker build & publish
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    uses: chodeus/chodeus-ops/workflows/docker-build.yml@main
+    with:
+      # dockerfile_path: deploy/docker/Dockerfile   # uncomment for chub
+      # build_context: deploy/docker                # uncomment for chub
+      push: ${{ github.event_name != 'pull_request' }}
+    secrets: inherit
+
+  notify:
+    if: always() && github.event_name != 'pull_request'
+    needs: build
+    uses: chodeus/chodeus-ops/workflows/notify-discord.yml@main
+    with:
+      event_type: build
+      status: ${{ needs.build.result == 'success' && 'success' || 'failure' }}
+      commit_sha: ${{ github.sha }}
+    secrets: inherit
