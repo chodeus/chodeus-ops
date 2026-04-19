@@ -1,0 +1,48 @@
+name: Smoke tests — reusables
+
+# Runs each reusable that supports a dry/no-op path to catch input-contract
+# drift (renamed inputs, removed outputs, broken YAML) before a change to
+# a reusable reaches downstream repos. Static analysis (actionlint) can't
+# do this across the workflow_call boundary.
+#
+# Keep additions cheap — reusables that need fake source trees (docker,
+# python, node, codeql) aren't smoked here; add only when a contract
+# breakage in one of them actually bites.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/stale-issues.yml'
+      - '.github/workflows/notify-discord.yml'
+      - '.github/workflows/smoke-reusables.yml'
+  pull_request:
+    paths:
+      - '.github/workflows/stale-issues.yml'
+      - '.github/workflows/notify-discord.yml'
+      - '.github/workflows/smoke-reusables.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  smoke-stale:
+    name: stale-issues (no-op days)
+    uses: ./.github/workflows/stale-issues.yml
+    with:
+      # 99999 days — no issue/PR will be marked or closed during the smoke.
+      days_before_stale: 99999
+      days_before_close: 99999
+
+  smoke-notify-discord:
+    name: notify-discord (dry_run)
+    uses: ./.github/workflows/notify-discord.yml
+    with:
+      event_type: workflow
+      status: info
+      title: "smoke test — should not post"
+      dry_run: true
