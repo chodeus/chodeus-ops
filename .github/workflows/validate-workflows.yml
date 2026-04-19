@@ -7,10 +7,14 @@ on:
     paths:
       - '.github/workflows/**'
       - '.github/actionlint.yaml'
+      - 'templates/**.yml'
+      - 'templates/**.yaml'
   pull_request:
     paths:
       - '.github/workflows/**'
       - '.github/actionlint.yaml'
+      - 'templates/**.yml'
+      - 'templates/**.yaml'
   workflow_dispatch:
 
 permissions:
@@ -31,10 +35,19 @@ jobs:
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash)
           echo "exe=$PWD/actionlint" >> "$GITHUB_OUTPUT"
 
-      - name: Run actionlint
+      - name: Run actionlint on .github/workflows
         shell: bash
         env:
           # Skip shellcheck info/style findings (e.g. SC2016 for intentional
           # single-quoted heredocs, SC2129 redirect-style). Real bugs still fail.
           SHELLCHECK_OPTS: --severity=warning
         run: ${{ steps.install.outputs.exe }} -color
+
+      - name: Run actionlint on templates
+        shell: bash
+        env:
+          SHELLCHECK_OPTS: --severity=warning
+        # Caller templates are real workflow YAML meant to be dropped into
+        # downstream repos. Validate their syntax at source so a broken
+        # template doesn't silently break every repo that adopts it.
+        run: ${{ steps.install.outputs.exe }} -color templates/*.yml
