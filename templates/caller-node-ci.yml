@@ -1,0 +1,25 @@
+# Drop into a repo's .github/workflows/ (e.g. as node-ci.yml or as a job
+# in an existing lint workflow). Customize inputs as needed.
+
+name: Node CI
+
+on:
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/node-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'frontend/**'
+
+jobs:
+  frontend-lint:
+    uses: chodeus/chodeus-ops/.github/workflows/node-ci.yml@main
+    with:
+      node_version: '20'
+      package_json_dir: frontend
+      run_lint: true
+      run_stylelint: true
+      run_prettier_check: true

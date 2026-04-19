@@ -1,0 +1,70 @@
+name: Reusable — Node lint
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        required: false
+        type: string
+        default: '20'
+      package_json_dir:
+        required: false
+        type: string
+        default: '.'
+      run_lint:
+        required: false
+        type: boolean
+        default: true
+      run_stylelint:
+        required: false
+        type: boolean
+        default: false
+      stylelint_glob:
+        required: false
+        type: string
+        default: "src/**/*.css"
+      run_prettier_check:
+        required: false
+        type: boolean
+        default: false
+      prettier_glob:
+        required: false
+        type: string
+        default: "src/**/*.{js,jsx,css,json,md}"
+
+permissions:
+  contents: read
+
+jobs:
+  node-lint:
+    name: Node lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+          cache-dependency-path: ${{ inputs.package_json_dir }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.package_json_dir }}
+        run: npm ci
+
+      - name: Run ESLint
+        if: inputs.run_lint
+        working-directory: ${{ inputs.package_json_dir }}
+        run: npm run lint
+
+      - name: Run Stylelint
+        if: inputs.run_stylelint
+        working-directory: ${{ inputs.package_json_dir }}
+        run: npx stylelint "${{ inputs.stylelint_glob }}"
+
+      - name: Check Prettier formatting
+        if: inputs.run_prettier_check
+        working-directory: ${{ inputs.package_json_dir }}
+        run: npx prettier --check "${{ inputs.prettier_glob }}"
