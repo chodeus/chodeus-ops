@@ -42,9 +42,14 @@ on:
         required: false
         type: string
         default: '0'
+      dry_run:
+        description: 'If true, compose the payload but do not POST (for smoke tests).'
+        required: false
+        type: boolean
+        default: false
     secrets:
       DISCORD_WEBHOOK_URL:
-        required: true
+        required: false
 
 jobs:
   notify:
@@ -62,6 +67,7 @@ jobs:
           IMAGE_TAG: ${{ inputs.image_tag }}
           CRIT: ${{ inputs.critical_vulns }}
           HIGH: ${{ inputs.high_vulns }}
+          DRY_RUN: ${{ inputs.dry_run }}
           REPO: ${{ github.repository }}
           ACTOR: ${{ github.actor }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -114,7 +120,7 @@ jobs:
           export TITLE DESC COLOR LINK
 
           python3 - <<'PY'
-          import json, os, urllib.request
+          import json, os, sys, urllib.request
           payload = {
               "embeds": [{
                   "title": os.environ["TITLE"][:256],
@@ -124,6 +130,10 @@ jobs:
                   "footer": {"text": f"{os.environ['REPO']} · {os.environ['ACTOR']}"},
               }]
           }
+          if os.environ.get("DRY_RUN", "false").lower() == "true":
+              print("dry_run: would POST the following payload:")
+              print(json.dumps(payload, indent=2))
+              sys.exit(0)
           req = urllib.request.Request(
               os.environ["WEBHOOK"],
               data=json.dumps(payload).encode(),
