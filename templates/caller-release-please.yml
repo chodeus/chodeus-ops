@@ -1,0 +1,17 @@
+# Drop into .github/workflows/release-please.yml of any Docker repo.
+# Also requires release-please-config.json, .release-please-manifest.json, and VERSION at repo root.
+
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@main
