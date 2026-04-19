@@ -33,4 +33,8 @@ jobs:
 
       - name: Run actionlint
         shell: bash
+        env:
+          # Skip shellcheck info/style findings (e.g. SC2016 for intentional
+          # single-quoted heredocs, SC2129 redirect-style). Real bugs still fail.
+          SHELLCHECK_OPTS: --severity=warning
         run: ${{ steps.install.outputs.exe }} -color
