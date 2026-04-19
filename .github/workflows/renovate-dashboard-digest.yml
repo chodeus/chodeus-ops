@@ -1,0 +1,63 @@
+name: Renovate dashboard digest
+
+# Weekly sweep of each repo's Renovate Dependency Dashboard for pending
+# rate-limited items (unchecked checkboxes). Pings Discord only if any
+# dashboard has pending items — otherwise silent.
+
+on:
+  schedule:
+    - cron: '30 16 * * 1'  # Mondays 16:30 UTC, after security-sweep at 16:00
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    outputs:
+      pending_count: ${{ steps.scan.outputs.count }}
+      description: ${{ steps.scan.outputs.description }}
+      repo_count: ${{ steps.scan.outputs.repo_count }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Scan Renovate dashboards
+        id: scan
+        env:
+          GH_TOKEN: ${{ secrets.DIGEST_TOKEN || secrets.GITHUB_TOKEN }}
+          OWNER: chodeus
+          REPOS: BeatsCheck,orpheusmorebetter,chub,sleezer,folder.view3,chodeus-ops
+        run: |
+          set -euo pipefail
+          python3 scripts/renovate_dashboard.py --owner "$OWNER" --repos "$REPOS" --format json > dashboard.json
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          d = json.load(open("dashboard.json"))
+          total = d["total_pending"]
+          dirty = [r for r in d["repos"] if r["pending"]]
+          print(f"count={total}")
+          print(f"repo_count={len(dirty)}")
+          # Compact per-repo summary: one short line each, dashboard-linkable.
+          lines = []
+          for r in dirty:
+              name = r["repo"].split("/", 1)[-1]
+              lines.append(f"• `{name}`: {len(r['pending'])}")
+          desc = "\n".join(lines) if lines else ""
+          print("description<<EOF")
+          print(desc)
+          print("EOF")
+          PY
+
+  notify:
+    needs: scan
+    if: needs.scan.outputs.pending_count != '0'
+    uses: ./.github/workflows/notify-discord.yml
+    with:
+      event_type: workflow
+      status: warning
+      title: "📋 ${{ needs.scan.outputs.pending_count }} pending Renovate item(s) across ${{ needs.scan.outputs.repo_count }} repo(s)"
+      description: ${{ needs.scan.outputs.description }}
+    secrets: inherit
