@@ -109,12 +109,26 @@ jobs:
               }]
           }
 
+          webhook = os.environ["WEBHOOK"]
+          # sanity check without leaking the secret:
+          print(f"webhook length: {len(webhook)}")
+          print(f"webhook prefix ok: {webhook.startswith('https://discord.com/api/webhooks/') or webhook.startswith('https://discordapp.com/api/webhooks/')}")
+          print(f"webhook has whitespace: {any(c.isspace() for c in webhook)}")
+
           req = urllib.request.Request(
-              os.environ["WEBHOOK"],
+              webhook,
               data=json.dumps(payload).encode(),
-              headers={"Content-Type": "application/json"},
+              headers={
+                  "Content-Type": "application/json",
+                  "User-Agent": "chodeus-ops-notifier/1.0 (+https://github.com/chodeus/chodeus-ops)",
+              },
           )
-          with urllib.request.urlopen(req, timeout=15) as r:
-              print("discord:", r.status)
+          try:
+              with urllib.request.urlopen(req, timeout=15) as r:
+                  print("discord:", r.status, r.read(200))
+          except urllib.error.HTTPError as e:
+              body = e.read().decode("utf-8", errors="replace")
+              print(f"discord HTTP {e.code}: {body}")
+              raise
           PY
         shell: bash
