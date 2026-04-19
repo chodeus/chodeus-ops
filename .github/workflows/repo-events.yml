@@ -20,7 +20,7 @@ jobs:
           EVENT_JSON: ${{ toJSON(github.event) }}
         run: |
           python3 - <<'PY'
-          import json, os, urllib.request
+          import json, os, re, urllib.request
 
           event = os.environ["EVENT_NAME"]
           action = os.environ["ACTION"]
@@ -36,6 +36,72 @@ jobs:
           COLOR_FAIL    = 15158332   # red
           COLOR_DEFAULT = 7506394    # slate
 
+          IS_BOT = actor.endswith("[bot]") or actor in ("renovate[bot]", "dependabot[bot]")
+
+          # Any line starting with pipe (catches truncated table rows too)
+          TABLE_ROW_RE = re.compile(r"^\s*\|.*$", re.M)
+          TABLE_SEP_RE = re.compile(r"^\s*\|[\s\-:|]+\|\s*$", re.M)
+          DROP_HEADER_RE = re.compile(
+              r"^#+\s*(Configuration|Automerge|Rebasing|Schedule|Repository Problems|View this repository|Rate-Limited).*$",
+              re.I | re.M,
+          )
+
+          def clean_body(raw: str, limit: int = 250):
+              """Strip markdown tables and common boilerplate, then soft-trim.
+              Returns (text, table_row_count)."""
+              if not raw:
+                  return "", 0
+              text = raw.strip()
+              # Count table rows before stripping so we can summarize
+              rows = TABLE_ROW_RE.findall(text)
+              data_rows = [r for r in rows if not TABLE_SEP_RE.match(r) and "---" not in r]
+              # Drop markdown tables entirely
+              text = TABLE_SEP_RE.sub("", text)
+              text = TABLE_ROW_RE.sub("", text)
+              # Drop boilerplate sections — headers and content until blank line
+              text = re.sub(
+                  r"(^#+\s*(Configuration|Automerge|Rebasing|Schedule|Repository Problems|Rate-Limited|View this repository).*?\n)(?:.(?!\n#))*?(?=\n#|\Z)",
+                  "",
+                  text,
+                  flags=re.I | re.S | re.M,
+              )
+              text = DROP_HEADER_RE.sub("", text)
+              # Strip HTML artefacts that Renovate includes
+              text = re.sub(r"<br\s*/?>", " ", text, flags=re.I)
+              text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+              # Strip standalone --- horizontal-rule lines (ugly in Discord)
+              text = re.sub(r"^\s*-{3,}\s*$", "", text, flags=re.M)
+              # Collapse blank-line runs
+              text = re.sub(r"\n{3,}", "\n\n", text).strip()
+              # Soft trim at sentence/line boundary
+              if len(text) > limit:
+                  cut = text.rfind("\n", 0, limit)
+                  if cut < limit - 80:
+                      cut = text.rfind(". ", 0, limit)
+                  if cut < 0:
+                      cut = limit
+                  text = text[:cut].rstrip() + "…"
+              return text, len(data_rows)
+
+          def bot_summary(title: str, body: str):
+              """Compact Renovate/Dependabot-specific lines."""
+              lines = []
+              # Try to extract first ~3 package names from the Renovate table
+              pkg_matches = re.findall(
+                  r"^\s*\|\s*\[?([a-zA-Z0-9._/-]+)\]?[^|]*\|", body, re.M
+              )
+              # Filter out header tokens
+              pkg_matches = [p for p in pkg_matches if p.lower() not in ("package", "---")]
+              if pkg_matches:
+                  shown = pkg_matches[:3]
+                  more = len(pkg_matches) - len(shown)
+                  line = f"📦 {len(pkg_matches)} package" + ("s" if len(pkg_matches) != 1 else "") + ": "
+                  line += ", ".join(f"`{p}`" for p in shown)
+                  if more > 0:
+                      line += f", +{more} more"
+                  lines.append(line)
+              return lines
+
           title = f"{event}.{action} in {repo}"
           url = f"https://github.com/{repo}"
           color = COLOR_DEFAULT
@@ -46,9 +112,16 @@ jobs:
               title = f"🐛 Issue {action}: #{issue.get('number')} — {issue.get('title', '')[:200]}"
               url = issue.get("html_url", url)
               color = COLOR_OPEN if action == "opened" else COLOR_CLOSED
-              body = (issue.get("body") or "").strip()[:500]
-              if body:
-                  desc_lines.append(body)
+              raw = issue.get("body") or ""
+              if IS_BOT:
+                  # Dashboard issues are verbose; just credit the bot
+                  cleaned, _ = clean_body(raw, limit=120)
+                  if cleaned:
+                      desc_lines.append(cleaned)
+              else:
+                  cleaned, _ = clean_body(raw, limit=250)
+                  if cleaned:
+                      desc_lines.append(cleaned)
               labels = ", ".join(l["name"] for l in issue.get("labels", []))
               if labels:
                   desc_lines.append(f"Labels: {labels}")
@@ -65,9 +138,14 @@ jobs:
                   color = COLOR_OPEN
               else:
                   color = COLOR_CLOSED
-              body = (pr.get("body") or "").strip()[:500]
-              if body:
-                  desc_lines.append(body)
+              raw = pr.get("body") or ""
+              if IS_BOT:
+                  # For Renovate/Dependabot: summarize packages, skip the verbose body
+                  desc_lines.extend(bot_summary(title, raw))
+              else:
+                  cleaned, _ = clean_body(raw, limit=250)
+                  if cleaned:
+                      desc_lines.append(cleaned)
               desc_lines.append(f"{pr.get('additions', 0)} additions / {pr.get('deletions', 0)} deletions")
 
           elif event == "release":
@@ -75,9 +153,9 @@ jobs:
               title = f"🚀 Release {action}: {rel.get('tag_name', '?')}"
               url = rel.get("html_url", url)
               color = COLOR_RELEASE
-              body = (rel.get("body") or "").strip()[:1500]
-              if body:
-                  desc_lines.append(body)
+              cleaned, _ = clean_body(rel.get("body") or "", limit=1200)
+              if cleaned:
+                  desc_lines.append(cleaned)
 
           elif event == "discussion":
               disc = data.get("discussion", {})
