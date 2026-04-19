@@ -55,7 +55,7 @@ jobs:
           sed -i "s|{{VERSION}}|${{ steps.ver.outputs.version }}|g; s|{{MD5}}|${{ steps.pack.outputs.md5 }}|g" "${{ inputs.plg_file }}"
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05083c923dcd9095 # v2.2.2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: v${{ steps.ver.outputs.version }}
           name: v${{ steps.ver.outputs.version }}
