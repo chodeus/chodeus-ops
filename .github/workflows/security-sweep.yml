@@ -41,7 +41,7 @@ jobs:
 
   notify:
     needs: alerts
-    uses: ./workflows/notify-discord.yml
+    uses: ./.github/workflows/notify-discord.yml
     with:
       event_type: security
       status: ${{ needs.alerts.outputs.critical != '0' && 'failure' || (needs.alerts.outputs.high != '0' && 'warning' || 'success') }}

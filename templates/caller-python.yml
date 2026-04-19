@@ -10,6 +10,6 @@ on:
 
 jobs:
   ci:
-    uses: chodeus/chodeus-ops/workflows/python-ci.yml@main
+    uses: chodeus/chodeus-ops/.github/workflows/python-ci.yml@main
     with:
       python_versions: '["3.12"]'

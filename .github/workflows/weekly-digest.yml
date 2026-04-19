@@ -50,7 +50,7 @@ jobs:
 
   notify:
     needs: digest
-    uses: ./workflows/notify-discord.yml
+    uses: ./.github/workflows/notify-discord.yml
     with:
       event_type: workflow
       status: success

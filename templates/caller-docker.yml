@@ -12,7 +12,7 @@ on:
 
 jobs:
   build:
-    uses: chodeus/chodeus-ops/workflows/docker-build.yml@main
+    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@main
     with:
       # dockerfile_path: deploy/docker/Dockerfile   # uncomment for chub
       # build_context: deploy/docker                # uncomment for chub
@@ -22,7 +22,7 @@ jobs:
   notify:
     if: always() && github.event_name != 'pull_request'
     needs: build
-    uses: chodeus/chodeus-ops/workflows/notify-discord.yml@main
+    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@main
     with:
       event_type: build
       status: ${{ needs.build.result == 'success' && 'success' || 'failure' }}

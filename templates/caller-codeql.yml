@@ -12,6 +12,6 @@ on:
 
 jobs:
   analyze:
-    uses: chodeus/chodeus-ops/workflows/codeql.yml@main
+    uses: chodeus/chodeus-ops/.github/workflows/codeql.yml@main
     with:
       languages: '["python"]'  # ["python"], ["javascript"], ["csharp"], or multiple

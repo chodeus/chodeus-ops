@@ -13,7 +13,7 @@ on:
 
 jobs:
   release:
-    uses: chodeus/chodeus-ops/workflows/unraid-plugin-release.yml@main
+    uses: chodeus/chodeus-ops/.github/workflows/unraid-plugin-release.yml@main
     with:
       plg_file: plugin/folder.view3.plg
       txz_source_dir: source
@@ -24,7 +24,7 @@ jobs:
   notify:
     if: always()
     needs: release
-    uses: chodeus/chodeus-ops/workflows/notify-discord.yml@main
+    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@main
     with:
       event_type: release
       status: ${{ needs.release.result == 'success' && 'success' || 'failure' }}
