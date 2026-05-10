@@ -7,4 +7,7 @@ on:
 
 jobs:
   stale:
+    permissions:
+      issues: write
+      pull-requests: write
     uses: chodeus/chodeus-ops/.github/workflows/stale-issues.yml@main
