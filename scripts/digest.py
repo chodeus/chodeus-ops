@@ -22,14 +22,22 @@ import sys
 from typing import Any
 
 
-def gh_api(path: str) -> Any:
-    """Call `gh api <path>` and return parsed JSON, or None on failure."""
+def gh_api(path: str, paginate: bool = True) -> Any:
+    """Call `gh api <path>` and return parsed JSON, or None on failure.
+
+    `paginate=False` honors any ?per_page= cap in the path. Use it for bounded
+    queries (e.g. ?per_page=20) — otherwise --paginate ignores the cap and
+    walks the full result set, which can time out on repos with deep history.
+    """
+    cmd = ["gh", "api", path]
+    if paginate:
+        cmd.append("--paginate")
     try:
         r = subprocess.run(
-            ["gh", "api", path, "--paginate"],
+            cmd,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=120,
             check=False,
         )
     except FileNotFoundError:
@@ -94,7 +102,7 @@ def repo_snapshot(owner: str, repo: str) -> dict[str, Any]:
     issues = [i for i in issues if "pull_request" not in i]
     snap["open_issues"] = len(issues)
 
-    runs = gh_api(f"/repos/{full}/actions/runs?per_page=20") or {}
+    runs = gh_api(f"/repos/{full}/actions/runs?per_page=20", paginate=False) or {}
     runs_list = runs.get("workflow_runs", []) if isinstance(runs, dict) else []
     snap["recent_failures"] = [
         {"name": r["name"], "url": r["html_url"], "branch": r.get("head_branch")}
@@ -102,7 +110,7 @@ def repo_snapshot(owner: str, repo: str) -> dict[str, Any]:
         if r.get("conclusion") == "failure"
     ][:5]
 
-    releases = gh_api(f"/repos/{full}/releases?per_page=1") or []
+    releases = gh_api(f"/repos/{full}/releases?per_page=1", paginate=False) or []
     if releases and isinstance(releases, list):
         latest = releases[0]
         snap["last_release"] = {
