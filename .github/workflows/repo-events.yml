@@ -4,7 +4,9 @@ on:
   workflow_call:
     secrets:
       DISCORD_WEBHOOK_URL:
-        required: true
+        # Optional so fork-PR runs (which have no secret access) skip cleanly
+        # instead of failing at runner startup.
+        required: false
 
 jobs:
   notify:
@@ -20,7 +22,15 @@ jobs:
           EVENT_JSON: ${{ toJSON(github.event) }}
         run: |
           python3 - <<'PY'
-          import json, os, re, urllib.request
+          import json, os, re, sys, urllib.request
+
+          webhook = os.environ.get("WEBHOOK", "")
+          if not webhook:
+              # Fork PRs and Dependabot PRs run without access to repo secrets.
+              # Exit cleanly so the workflow stays green instead of failing
+              # the post-merge pull_request.closed event from external PRs.
+              print("DISCORD_WEBHOOK_URL not available (likely fork or bot PR); skipping notify.")
+              sys.exit(0)
 
           event = os.environ["EVENT_NAME"]
           action = os.environ["ACTION"]
@@ -109,7 +119,7 @@ jobs:
               }]
           }
 
-          webhook = os.environ["WEBHOOK"]
+          # webhook already validated non-empty at the top of this script
           # sanity check without leaking the secret:
           print(f"webhook length: {len(webhook)}")
           print(f"webhook prefix ok: {webhook.startswith('https://discord.com/api/webhooks/') or webhook.startswith('https://discordapp.com/api/webhooks/')}")
