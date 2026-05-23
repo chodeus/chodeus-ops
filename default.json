@@ -25,11 +25,17 @@
   },
   "packageRules": [
     {
-      "description": "Auto-merge patch updates after CI passes",
-      "matchUpdateTypes": ["patch", "pin", "digest"],
+      "description": "Auto-merge patch + pin updates after CI passes. Digest bumps are excluded so a broken pin gets a manual look before landing on main.",
+      "matchUpdateTypes": ["patch", "pin"],
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
+    },
+    {
+      "description": "Keep pydantic + pydantic-core in lockstep. pydantic strictly pins pydantic-core in its metadata, so bumping one without the other yields an unresolvable PR.",
+      "matchManagers": ["pip_requirements", "pip_setup", "pyproject"],
+      "matchPackageNames": ["pydantic", "pydantic-core", "pydantic_core"],
+      "groupName": "pydantic"
     },
     {
       "description": "Group Python dev deps",
