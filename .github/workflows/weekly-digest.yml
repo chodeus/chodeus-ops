@@ -22,7 +22,7 @@ jobs:
           # DIGEST_TOKEN is a PAT with `security_events` + `repo` scopes — needed to read
           # Dependabot alerts across the portfolio. Falls back to GITHUB_TOKEN (local repo only).
           GH_TOKEN: ${{ secrets.DIGEST_TOKEN || secrets.GITHUB_TOKEN }}
-          REPOS: BeatsCheck,orpheusmorebetter,chub,sleezer,folder.view3
+          REPOS: BeatsCheck,orpheusmorebetter,chub,sleezer,folder.view3,appdata.cleanup.ng
           OWNER: chodeus
         run: |
           python3 scripts/digest.py --owner "$OWNER" --repos "$REPOS" --format github-issue > digest.md
