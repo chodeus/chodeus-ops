@@ -12,7 +12,10 @@ on:
 
 jobs:
   build:
-    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@main
+    # Pin the reusable to an immutable SHA, not @main: a single commit to
+    # chodeus-ops main would otherwise execute in every consumer repo with its
+    # secrets + write token. Renovate keeps this SHA current with a review PR.
+    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@acf15a4723a221b8ef20c6ca56b32730bebfc7bd # pinned (scan-before-push)
     with:
       # dockerfile_path: deploy/docker/Dockerfile   # uncomment for chub
       # build_context: deploy/docker                # uncomment for chub
@@ -22,7 +25,7 @@ jobs:
   notify:
     if: always() && github.event_name != 'pull_request'
     needs: build
-    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@main
+    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@acf15a4723a221b8ef20c6ca56b32730bebfc7bd # pinned (scan-before-push)
     with:
       event_type: build
       status: ${{ needs.build.result == 'success' && 'success' || 'failure' }}
