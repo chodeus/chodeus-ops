@@ -51,6 +51,10 @@ on:
       DISCORD_WEBHOOK_URL:
         required: false
 
+# Webhook-only: no GitHub API/token use. Empty = least privilege so a caller
+# with a read+write default token can't over-grant this job.
+permissions: {}
+
 jobs:
   notify:
     runs-on: ubuntu-latest

@@ -25,15 +25,15 @@
   },
   "packageRules": [
     {
-      "description": "Auto-merge patch + pin updates after CI passes. Dockerfile digest bumps stay manual — a broken base-image digest already broke main once (see commit 513b008). docker-compose and github-actions digests auto-merge via the rule below; those are docs-example pins (no runtime impact) and SHA-pinned actions (broken SHA = action-not-found = CI fail) respectively.",
+      "description": "Auto-merge patch + pin updates after CI passes. Dockerfile digest bumps stay manual — a broken base-image digest already broke main once (see commit 513b008). docker-compose digests auto-merge via the rule below (docs-example pins, no runtime impact); github-actions digest bumps are NOT auto-merged so a repointed/compromised action SHA still gets a review PR.",
       "matchUpdateTypes": ["patch", "pin"],
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
     },
     {
-      "description": "Auto-merge digest bumps for the low-risk managers only: docker-compose (compose.yaml/docker-compose.yml example pins — docs surface, never executed in CI or production) and github-actions (every action is already SHA-pinned, so a stale Renovate cache pointing at a non-existent SHA shows up immediately as action-not-found in the next workflow run). Dockerfile FROM digests are deliberately excluded — those drive every build and have caused breakage before. Per-repo opt-outs (e.g. BeatsCheck's chodeus/chodeus-ops carve-out) still take precedence.",
-      "matchManagers": ["docker-compose", "github-actions"],
+      "description": "Auto-merge digest bumps for docker-compose only (compose.yaml/docker-compose.yml example pins — docs surface, never executed in CI or production). github-actions digests are deliberately NOT auto-merged: SHA-pinning exists to force human review of upstream action changes, and a repointed or compromised tag re-resolves to a new SHA that still passes CI, so those bumps must get a review PR (the old 'broken SHA = action-not-found' rationale only caught deleted SHAs, not malicious ones). Dockerfile FROM digests are also excluded — those drive every build and have caused breakage before. Per-repo opt-outs (e.g. BeatsCheck's chodeus/chodeus-ops carve-out) still take precedence.",
+      "matchManagers": ["docker-compose"],
       "matchUpdateTypes": ["digest"],
       "automerge": true,
       "automergeType": "pr",

@@ -48,7 +48,56 @@ permissions:
   security-events: write
 
 jobs:
+  # Build the image locally (single platform, no push) and scan it. Trivy runs
+  # in image mode with exit-code 1, so CRITICAL/HIGH findings fail here BEFORE
+  # anything reaches GHCR. The multi-arch push only runs if this job succeeds.
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Build image for scanning
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile_path }}
+          # Single platform only: buildx can `load` into the local daemon for
+          # scanning; a multi-arch manifest cannot be loaded. The push job below
+          # rebuilds all platforms (amd64 layers come from the gha cache).
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: chodeus-scan:${{ github.sha }}
+          build-args: ${{ inputs.build_args }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy scan (image)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          scan-type: image
+          image-ref: chodeus-scan:${{ github.sha }}
+          severity: ${{ inputs.trivy_severity }}
+          exit-code: '1'
+          format: sarif
+          output: trivy-image.sarif
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@4e828ff8d448a8a6e532957b1811f387a63867e8 # v3.29.4
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
   build:
+    needs: scan
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.build.outputs.digest }}
@@ -106,20 +155,3 @@ jobs:
           sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Trivy scan (filesystem)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
-        with:
-          scan-type: fs
-          scan-ref: ${{ inputs.build_context }}
-          severity: ${{ inputs.trivy_severity }}
-          exit-code: '0'
-          format: sarif
-          output: trivy-fs.sarif
-
-      - name: Upload Trivy SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@4e828ff8d448a8a6e532957b1811f387a63867e8 # v3.29.4
-        with:
-          sarif_file: trivy-fs.sarif
-          category: trivy-fs
