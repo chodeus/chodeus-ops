@@ -25,8 +25,8 @@
   },
   "packageRules": [
     {
-      "description": "Auto-merge patch + pin updates after CI passes. Dockerfile digest bumps stay manual — a broken base-image digest already broke main once (see commit 513b008). docker-compose digests auto-merge via the rule below (docs-example pins, no runtime impact); github-actions digest bumps are NOT auto-merged so a repointed/compromised action SHA still gets a review PR.",
-      "matchUpdateTypes": ["patch", "pin"],
+      "description": "Auto-merge minor + patch + pin updates after CI passes (minors added 2026-07-21 once required status checks landed fleet-wide). Dockerfile digest bumps stay manual — a broken base-image digest already broke main once (see commit 513b008). docker-compose digests auto-merge via the rule below (docs-example pins, no runtime impact); github-actions digest bumps are NOT auto-merged so a repointed/compromised action SHA still gets a review PR.",
+      "matchUpdateTypes": ["minor", "patch", "pin"],
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
