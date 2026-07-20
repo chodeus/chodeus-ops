@@ -16,13 +16,22 @@ jobs:
       - name: Checkout chodeus-ops
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
+      # Derives the repo set live instead of a hand-maintained allowlist — see
+      # scripts/active_repos.py for the (shared, keep-in-sync) skip-list of
+      # pure-tracking forks it excludes.
+      - name: Resolve active repos
+        id: repos
+        env:
+          GH_TOKEN: ${{ secrets.DIGEST_TOKEN || secrets.GITHUB_TOKEN }}
+        run: echo "list=$(python3 scripts/active_repos.py --owner chodeus)" >> "$GITHUB_OUTPUT"
+
       - name: Generate digest
         id: gen
         env:
           # DIGEST_TOKEN is a PAT with `security_events` + `repo` scopes — needed to read
           # Dependabot alerts across the portfolio. Falls back to GITHUB_TOKEN (local repo only).
           GH_TOKEN: ${{ secrets.DIGEST_TOKEN || secrets.GITHUB_TOKEN }}
-          REPOS: BeatsCheck,orpheusmorebetter,chub,sleezer,folder.view3,appdata.cleanup.ng
+          REPOS: ${{ steps.repos.outputs.list }}
           OWNER: chodeus
         run: |
           python3 scripts/digest.py --owner "$OWNER" --repos "$REPOS" --format github-issue > digest.md
