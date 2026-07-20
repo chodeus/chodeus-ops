@@ -19,12 +19,21 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
+      # Derives the repo set live instead of a hand-maintained allowlist — see
+      # scripts/active_repos.py for the (shared, keep-in-sync) skip-list of
+      # pure-tracking forks it excludes.
+      - name: Resolve active repos
+        id: repos
+        env:
+          GH_TOKEN: ${{ secrets.DIGEST_TOKEN || secrets.GITHUB_TOKEN }}
+        run: echo "list=$(python3 scripts/active_repos.py --owner chodeus)" >> "$GITHUB_OUTPUT"
+
       - name: Aggregate Dependabot alerts
         id: scan
         env:
           GH_TOKEN: ${{ secrets.DIGEST_TOKEN || secrets.GITHUB_TOKEN }}
           OWNER: chodeus
-          REPOS: BeatsCheck,orpheusmorebetter,chub,sleezer,folder.view3
+          REPOS: ${{ steps.repos.outputs.list }}
         run: |
           python3 scripts/dependency_report.py --owner "$OWNER" --repos "$REPOS" --output summary.json
           python3 -c "
