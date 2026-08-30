@@ -1,0 +1,51 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Ten reusable (workflow_call) workflows plus their caller templates. A defect
+# here propagates to every repo that calls them, so review it as shared infra.
+language: en-US
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+
+  path_instructions:
+    - path: ".github/workflows/**"
+      instructions: |-
+        Reusable workflows consumed by other repos — a change here ships to every caller at once:
+        - A reusable workflow gets NO permissions from its caller: it must declare its own `permissions:` block, least-privilege, per job. A missing or over-broad block is the defect — a missing one can fail the run at startup, and an over-broad one hands every caller write scope it never asked for.
+        - Treat inputs and secrets as the public API. Adding a REQUIRED input, renaming one, or removing a default is a breaking change for every caller in templates/ — flag it unless the matching caller template changes in the same PR.
+        - `secrets: inherit` hands the caller's entire secret set over. Prefer naming the specific secrets a workflow needs. Never echo a secret, and never let one reach a `run:` block's argv where it lands in logs.
+        - Never interpolate untrusted input (PR title, branch name, issue body, tag) directly into `run:` — that is script injection. Pass it through `env:` and quote the expansion.
+        - Pin third-party actions by commit SHA, not a mutable tag; a tag can be moved under you.
+        - `pull_request_target` and workflows triggered by forks run with write access to the base repo — they must never check out or execute untrusted PR code.
+        - When a gate that used to BLOCK becomes non-blocking, audit every downstream step that relied on it. Enumerate allowed states positively (`== 'success' || == 'skipped'`), never by negation — a third state slips through `!= 'failure'`.
+    - path: "templates/caller-*.yml"
+      instructions: |-
+        Caller templates — what other repos copy in:
+        - Must stay in lockstep with the reusable workflow they call. An input added, renamed or made required upstream has to appear here, or every repo that copies this template breaks on its next run.
+        - Keep the `uses:` reference pinned the way callers should pin it; the template is the example people follow, so a sloppy ref here propagates.
+        - Grant the caller only the permissions the reusable workflow actually needs.
+    - path: "scripts/*.py"
+      instructions: |-
+        Cross-repo reporting scripts (digest, dependency report, audit, renovate dashboard):
+        - They authenticate to the GitHub API: never log, print or embed a token, and never place one in a URL — an HTTP client exception carries the full request URL into the traceback.
+        - Distinguish a genuine empty result from a failed call. An API error, rate-limit or 5xx must not be reported as "no findings" — that turns a broken audit into a clean-looking report, which is worse than no report.
+        - Handle pagination explicitly; a first-page-only read silently under-reports across dozens of repos.
+        - Respect the API rate limit on new call paths, including loops added over the repo list, and back off on 429 using Retry-After.
+    - path: "{default.json,templates/*.json}"
+      instructions: |-
+        Shared Renovate and release-please defaults inherited by other repos:
+        - Automerge must not cover a base-image, runtime or toolchain major jump — green checks on a config-only PR do not prove the image still builds.
+        - A change here is a change to every consuming repo's update behaviour; call out the blast radius explicitly.
+
+  tools:
+    gitleaks:
+      enabled: true
+    actionlint:
+      enabled: true
+    ruff:
+      enabled: true
