@@ -88,7 +88,8 @@ jobs:
           set -euo pipefail
           wf="${GITHUB_WORKFLOW_REF#*/*/}"
           wf="${wf%@*}"
-          ref=$(grep -oE 'chodeus/chodeus-ops/\.github/workflows/unraid-plugin-release\.yml@[^ ]+' "repo/$wf" | head -1 | cut -d@ -f2 || true)
+          # Ref charset only: a quoted `uses:` value would otherwise carry its closing quote.
+          ref=$(grep -oE 'chodeus/chodeus-ops/\.github/workflows/unraid-plugin-release\.yml@[A-Za-z0-9._/-]+' "repo/$wf" | head -1 | cut -d@ -f2 || true)
           echo "ref=${ref:-main}" >> "$GITHUB_OUTPUT"
           echo "release scripts ref: ${ref:-main}"
 

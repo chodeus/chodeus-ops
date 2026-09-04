@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -189,6 +190,26 @@ grep -c 'SEKRIT' .git/config >> {probe} || true   # after: reattached for the pu
     subprocess.run(["bash", "-c", script], check=True, env=env, capture_output=True)
     before, during, after = probe.read_text().split()
     assert (before, during, after) == ("1", "0", "1"), probe.read_text()
+
+
+def test_ops_ref_parsing_handles_quoted_and_commented_callers():
+    """The ref the reusable checks out comes from the caller's own `uses:` line."""
+    workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/unraid-plugin-release.yml").read_text()
+    m = re.search(r"grep -oE '(?P<pat>chodeus/chodeus-ops[^']+)'", workflow)
+    assert m, "ops-ref grep pattern not found — the test is pinned to the workflow"
+    pattern = re.compile(m.group("pat").replace("\\.", r"\."))
+    stem = "uses: %schodeus/chodeus-ops/.github/workflows/unraid-plugin-release.yml@%s%s"
+    cases = {
+        stem % ("", "main", ""): "main",
+        stem % ('"', "abc1234", '"'): "abc1234",
+        stem % ("'", "v1.2", "'"): "v1.2",
+        stem % ("", "abc1234", " # v1.2"): "abc1234",
+        stem % ("", "release/2026", "\r"): "release/2026",
+    }
+    for line, want in cases.items():
+        found = pattern.search(line)
+        assert found, line
+        assert found.group(0).split("@", 1)[1] == want, line
 
 
 def test_cut_script_brackets_the_build_with_deauth_and_auth():

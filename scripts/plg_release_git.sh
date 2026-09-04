@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Shared git setup for the release scripts. Sourced, not executed.
-#
-# The plugin repo is checked out with persist-credentials: false, so RELEASE_TOKEN is
-# never in .git/config while the plugin's own build command runs. Authentication is
-# attached only around the pushes that need it.
+# Sourced, not executed. The plugin repo checks out with persist-credentials: false;
+# these attach the token to origin only around the pushes, never across the build.
 
 # Identity plus an authenticated origin. Outside Actions (no token) the remote is left alone.
 plg_git_setup() {
