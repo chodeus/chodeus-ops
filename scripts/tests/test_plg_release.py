@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -161,6 +162,40 @@ def test_stamp_notes_and_check_flags(fv3):
     run("render", "--plg", plg, "--changelog", changelog, "--channel", "beta")
     assert "###2026.09.05.1\n- Raw seed rewritten as prose (#9)\n\n###2026.08.28" in plg.read_text()
     assert run("notes", "--changelog", changelog, "--version", "2026.09.05.1", "--footer", "Install: x") == 0
+
+
+SCRIPTS = Path(__file__).resolve().parents[1]
+
+
+def test_release_token_is_absent_from_git_config_during_the_build(tmp_path):
+    """The build command must not be able to read the token out of .git/config."""
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "remote", "add", "origin",
+                    "https://github.com/chodeus/plugin.git"], check=True)
+    probe = tmp_path / "seen.txt"
+    script = f"""
+set -euo pipefail
+cd {tmp_path}
+. {SCRIPTS}/plg_release_git.sh
+plg_git_setup
+grep -c 'SEKRIT' .git/config >> {probe} || true   # before: token attached
+plg_git_deauth
+grep -c 'SEKRIT' .git/config >> {probe} || true   # during the build: must be 0
+plg_git_auth
+grep -c 'SEKRIT' .git/config >> {probe} || true   # after: reattached for the push
+"""
+    env = {**os.environ, "GH_TOKEN": "SEKRIT", "GITHUB_REPOSITORY": "chodeus/plugin",
+           "GIT_USER": "chodeus", "GIT_EMAIL": "c@example.com"}
+    subprocess.run(["bash", "-c", script], check=True, env=env, capture_output=True)
+    before, during, after = probe.read_text().split()
+    assert (before, during, after) == ("1", "0", "1"), probe.read_text()
+
+
+def test_cut_script_brackets_the_build_with_deauth_and_auth():
+    """Ordering guard: a refactor must not reopen the window the test above closes."""
+    body = (SCRIPTS / "plg_release_cut.sh").read_text()
+    deauth, build, auth = (body.index(t) for t in ("plg_git_deauth", '"${BUILD[@]}"', "plg_git_auth\n"))
+    assert deauth < build < auth
 
 
 def test_declared_entity_survives_but_bare_ampersand_is_escaped():

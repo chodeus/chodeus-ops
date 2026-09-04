@@ -9,8 +9,8 @@ PR_NUMBER="${PR_NUMBER:-}"
 read -ra BUILD <<< "${BUILD_CMD:-bash pkg_build.sh}"
 PLGR="python3 $OPS/plg_release.py"
 
-git config user.name "$GIT_USER"
-git config user.email "$GIT_EMAIL"
+. "$OPS/plg_release_git.sh"
+plg_git_setup
 git fetch --tags --force origin
 
 version=$($PLGR next-version --channel "$CHANNEL" --tz "$TZ")
@@ -30,8 +30,11 @@ $PLGR stamp --changelog "$CHANGELOG" --version "$version" "${beta_flag[@]}"
 $PLGR render --plg "$PLG" --changelog "$CHANGELOG" --channel "$CHANNEL"
 
 rm -rf dist
-# env -u GH_TOKEN: the plugin's own build script has no business seeing the release token.
+# The plugin's own build script must not see the release token: strip it from the
+# environment and from .git/config for the duration of the build.
+plg_git_deauth
 env -u GH_TOKEN "${BUILD[@]}" --version "$version" --branch "$BASE"
+plg_git_auth
 mapfile -t txz < <(find dist -maxdepth 1 -name '*.txz' -type f)
 [ "${#txz[@]}" -eq 1 ] || { echo "::error::expected exactly one dist/*.txz, found ${#txz[@]}"; exit 1; }
 xmllint --noout "$PLG"

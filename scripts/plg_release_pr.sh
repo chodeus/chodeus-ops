@@ -9,8 +9,8 @@ DRY_RUN="${DRY_RUN:-false}"
 RB="release/$CHANNEL"
 PLGR="python3 $OPS/plg_release.py"
 
-git config user.name "$GIT_USER"
-git config user.email "$GIT_EMAIL"
+. "$OPS/plg_release_git.sh"
+plg_git_setup
 git fetch --no-tags origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
 git fetch --no-tags origin "+refs/heads/$RB:refs/remotes/origin/$RB" 2>/dev/null || true
 [ -z "$BETA_BRANCH" ] || git fetch --no-tags origin "+refs/heads/$BETA_BRANCH:refs/remotes/origin/$BETA_BRANCH"

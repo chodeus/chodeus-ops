@@ -77,6 +77,9 @@ jobs:
           path: repo
           fetch-depth: 0
           token: ${{ secrets.RELEASE_TOKEN }}
+          # The scripts attach the token to origin themselves, around the pushes that need
+          # it, so it is absent from .git/config while the plugin's build command runs.
+          persist-credentials: false
 
       - name: Resolve release-scripts ref
         # Scripts come from the same chodeus-ops commit the caller pinned in its `uses:` line.

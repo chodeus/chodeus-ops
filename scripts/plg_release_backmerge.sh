@@ -7,8 +7,8 @@ set -euo pipefail
 DRY_RUN="${DRY_RUN:-false}"
 PLGR="python3 $OPS/plg_release.py"
 
-git config user.name "$GIT_USER"
-git config user.email "$GIT_EMAIL"
+. "$OPS/plg_release_git.sh"
+plg_git_setup
 git fetch --no-tags origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" "+refs/heads/$BETA_BRANCH:refs/remotes/origin/$BETA_BRANCH"
 git switch -q -C "$BETA_BRANCH" "origin/$BETA_BRANCH"
 
