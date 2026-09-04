@@ -3,8 +3,13 @@
 # here propagates to every repo that calls them, so review it as shared infra.
 language: en-US
 reviews:
-  profile: chill
+  # assertive: chill passed a diff clean that assertive flagged with two Major findings (2026-09-03); the "**" rule keeps style nits out
+  profile: assertive
   request_changes_workflow: false
+  pre_merge_checks:
+    # off: the 80% docstring-coverage warning contradicts the one-line-docstring rule under "**"
+    docstrings:
+      mode: "off"
   high_level_summary: true
   poem: false
   review_status: true
@@ -48,9 +53,16 @@ reviews:
           what a non-obvious block does, or the gotcha it guards. No why/history
           essays, no before/after narrative, no restating the code, no section
           banners. Docstrings: one line unless the signature genuinely cannot
-          carry it.
+          carry it. Never ask for a docstring to be added; a missing docstring
+          is not a finding.
         - The 1-2 line cap wins even inside an already heavily-commented file —
           matching local density is not licence to exceed it.
+        - A comment, docstring, help text, column header, log message or UI label
+          that disagrees with what the code does is a correctness finding, not a
+          stale-comment nit: report it and say which side is wrong.
+        - Do not flag stylistic preferences that are consistent across the file
+          (naming, quoting, import order, formatting, line length). Report
+          correctness, security, data-loss and the classes named above.
 
   tools:
     gitleaks:
