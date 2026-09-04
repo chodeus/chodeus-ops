@@ -88,8 +88,13 @@ jobs:
           set -euo pipefail
           wf="${GITHUB_WORKFLOW_REF#*/*/}"
           wf="${wf%@*}"
-          # Ref charset only: a quoted `uses:` value would otherwise carry its closing quote.
-          ref=$(grep -oE 'chodeus/chodeus-ops/\.github/workflows/unraid-plugin-release\.yml@[A-Za-z0-9._/-]+' "repo/$wf" | head -1 | cut -d@ -f2 || true)
+          # Anchor on the uses: key so a commented-out line cannot win, then take the
+          # whole value up to a quote, space or comment so refs like a/b+c stay intact.
+          line=$(grep -E "^[[:space:]]*uses:[[:space:]]*['\"]?chodeus/chodeus-ops/\.github/workflows/unraid-plugin-release\.yml@" "repo/$wf" | head -1 || true)
+          ref="${line##*@}"
+          ref="${ref%%[\"\' ]*}"
+          ref="${ref%%#*}"
+          ref="${ref%$'\r'}"
           echo "ref=${ref:-main}" >> "$GITHUB_OUTPUT"
           echo "release scripts ref: ${ref:-main}"
 

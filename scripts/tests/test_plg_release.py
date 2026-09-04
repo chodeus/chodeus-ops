@@ -192,24 +192,42 @@ grep -c 'SEKRIT' .git/config >> {probe} || true   # after: reattached for the pu
     assert (before, during, after) == ("1", "0", "1"), probe.read_text()
 
 
-def test_ops_ref_parsing_handles_quoted_and_commented_callers():
-    """The ref the reusable checks out comes from the caller's own `uses:` line."""
-    workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/unraid-plugin-release.yml").read_text()
-    m = re.search(r"grep -oE '(?P<pat>chodeus/chodeus-ops[^']+)'", workflow)
-    assert m, "ops-ref grep pattern not found — the test is pinned to the workflow"
-    pattern = re.compile(m.group("pat").replace("\\.", r"\."))
-    stem = "uses: %schodeus/chodeus-ops/.github/workflows/unraid-plugin-release.yml@%s%s"
-    cases = {
-        stem % ("", "main", ""): "main",
-        stem % ('"', "abc1234", '"'): "abc1234",
-        stem % ("'", "v1.2", "'"): "v1.2",
-        stem % ("", "abc1234", " # v1.2"): "abc1234",
-        stem % ("", "release/2026", "\r"): "release/2026",
-    }
-    for line, want in cases.items():
-        found = pattern.search(line)
-        assert found, line
-        assert found.group(0).split("@", 1)[1] == want, line
+USES = "chodeus/chodeus-ops/.github/workflows/unraid-plugin-release.yml"
+
+
+def _resolve_ops_ref(tmp_path, caller_yaml):
+    """Run the workflow's own 'Resolve release-scripts ref' script against a caller file."""
+    import yaml
+
+    wf = yaml.safe_load((SCRIPTS.parent / ".github/workflows/unraid-plugin-release.yml").read_text())
+    step = next(s for s in wf["jobs"]["release"]["steps"] if s.get("id") == "opsref")
+    caller = tmp_path / "repo/.github/workflows/release.yml"
+    caller.parent.mkdir(parents=True)
+    caller.write_text(caller_yaml)
+    out = tmp_path / "out.txt"
+    out.touch()
+    env = {**os.environ, "GITHUB_WORKFLOW_REF": "chodeus/plugin/.github/workflows/release.yml@refs/heads/main",
+           "GITHUB_OUTPUT": str(out)}
+    subprocess.run(["bash", "-c", step["run"]], cwd=tmp_path, env=env, check=True, capture_output=True)
+    return re.search(r"ref=(.*)", out.read_text()).group(1)
+
+
+@pytest.mark.parametrize("value,want", [
+    (f"uses: {USES}@main", "main"),
+    (f'uses: "{USES}@abc1234"', "abc1234"),
+    (f"uses: '{USES}@v1.2'", "v1.2"),
+    (f"uses: {USES}@abc1234 # v1.2", "abc1234"),
+    (f"uses: {USES}@release/v1+hotfix", "release/v1+hotfix"),
+    (f"uses: {USES}@abc1234\r", "abc1234"),
+    ("uses: some/other/workflow.yml@x", "main"),  # no caller line: fall back
+])
+def test_ops_ref_parsing(tmp_path, value, want):
+    assert _resolve_ops_ref(tmp_path, f"jobs:\n  release:\n    {value}\n") == want
+
+
+def test_ops_ref_ignores_a_commented_out_uses_line(tmp_path):
+    caller = f"jobs:\n  release:\n    # uses: {USES}@stale000\n    uses: {USES}@live111\n"
+    assert _resolve_ops_ref(tmp_path, caller) == "live111"
 
 
 def test_cut_script_brackets_the_build_with_deauth_and_auth():
