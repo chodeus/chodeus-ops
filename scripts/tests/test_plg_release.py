@@ -21,7 +21,7 @@ FV3_PLG = """<?xml version="1.0" standalone="yes"?>
 <PLUGIN name="&name;" version="&version;" pluginURL="&pluginURL;">
     <CHANGES>
 
-After updating, hard-refresh your browser &amp; clear cache &lt;now&gt;.
+After updating, hard-refresh your browser &amp; clear cache &lt;now&gt;. See &name; docs.
 
 ###2026.08.28
 - Containers assigned by a label no longer override a folder you picked
@@ -96,7 +96,7 @@ def test_migrate_unescapes_and_keeps_heading_suffixes(fv3):
     plg, changelog = fv3
     run("migrate", "--plg", plg, "--changelog", changelog)
     text = changelog.read_text()
-    assert "browser & clear cache <now>." in text
+    assert "browser & clear cache <now>. See &name; docs." in text
     assert "## 2026.08.14 - Titled release\n" in text
     assert "## 2026.08.01.2 and 2026.08.01.1\n" in text
     assert pr.load_changelog(changelog).find("2026.08.01.2").rest == " and 2026.08.01.1"
@@ -161,6 +161,47 @@ def test_stamp_notes_and_check_flags(fv3):
     run("render", "--plg", plg, "--changelog", changelog, "--channel", "beta")
     assert "###2026.09.05.1\n- Raw seed rewritten as prose (#9)\n\n###2026.08.28" in plg.read_text()
     assert run("notes", "--changelog", changelog, "--version", "2026.09.05.1", "--footer", "Install: x") == 0
+
+
+def test_declared_entity_survives_but_bare_ampersand_is_escaped():
+    assert pr._xml_escape("See &name; and &#124; and Tom & Jerry") == "See &name; and &#124; and Tom &amp; Jerry"
+    assert pr._xml_escape("a & b") == "a &amp; b"
+
+
+def test_require_edited_catches_sha_suffixed_seed_bullets(fv3):
+    plg, changelog = fv3
+    run("migrate", "--plg", plg, "--changelog", changelog)
+    args = ("check", "--changelog", changelog, "--plg", plg, "--channel", "beta", "--branch", "beta", "--require-edited")
+
+    def with_unreleased(bullet):
+        base = pr.load_changelog(changelog)
+        base.sections = [s for s in base.sections if s.released]
+        base.sections.insert(0, pr.Section(pr.UNRELEASED, body=[bullet]))
+        pr.save_changelog(changelog, base)
+
+    with_unreleased("- Enhance icon caching (a1b2c3d)")  # seed shape: subject + short sha
+    assert run(*args) == 1
+    with_unreleased("- fix(ui): keep folder order")  # seed shape: conventional commit
+    assert run(*args) == 1
+    with_unreleased("- Folders keep their order when labels disagree (#63)")  # edited: cites a PR
+    assert run(*args) == 0
+
+
+def test_git_failure_surfaces_stderr(tmp_path, capsys):
+    changelog = tmp_path / "c.md"
+    changelog.write_text("# Changelog\n\n## 2026.09.05\n\n- x\n")
+    assert run("seed", "--changelog", changelog, "--since", "v-does-not-exist", "--repo", tmp_path) == 2
+    err = capsys.readouterr().err
+    assert "not a git repository" in err.lower() or "unknown revision" in err.lower()
+
+
+def test_execution_errors_exit_2_not_1(tmp_path):
+    missing = tmp_path / "nope.md"
+    plg = tmp_path / "nope.plg"
+    assert run("check", "--changelog", missing, "--plg", plg, "--channel", "stable", "--branch", "main") == 2
+    changelog = tmp_path / "c.md"
+    changelog.write_text("# Changelog\n\n## 2026.09.05\n\n- x\n")
+    assert run("next-version", "--channel", "stable", "--tz", "Mars/Olympus", "--repo", tmp_path) == 2
 
 
 def test_check_reports_unsynced_plg(fv3):

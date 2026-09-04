@@ -68,14 +68,17 @@ carry=()
 [ -z "$OLD_CL" ] || carry=(--carry-from "$OLD_CL")
 $PLGR seed --changelog "$CHANGELOG" "${carry[@]}" "${seed_args[@]}"
 
-count=$($PLGR notes --changelog "$CHANGELOG" --version Unreleased | grep -c '^- ' || true)
+# Capture first: piping straight into grep -c would turn a notes failure into "nothing to release".
+notes=$($PLGR notes --changelog "$CHANGELOG" --version Unreleased)
+count=$(printf '%s\n' "$notes" | grep -c '^- ' || true)
 if [ "$count" -eq 0 ] && [ -z "$OLD_SHA" ]; then
   echo "::notice::nothing to release on $BASE — no release PR opened"
   exit 0
 fi
 
+# --allow-empty: an emptied Unreleased section still has to record the Release-Synced trailer.
 git add "$CHANGELOG"
-git commit -q -m "chore($BASE): release changelog" -m "Release-Synced: $(git rev-parse "origin/$BASE")"
+git commit -q --allow-empty -m "chore($BASE): release changelog" -m "Release-Synced: $(git rev-parse "origin/$BASE")"
 
 if [ "$DRY_RUN" = true ]; then
   echo "::notice::dry run — would push $RB and open/update the release PR"
@@ -94,19 +97,19 @@ body=$(mktemp)
 {
   echo "Merge this PR to cut the next **$CHANNEL** release. Edit the Unreleased section of \`$CHANGELOG\` on this branch first; the release job stamps the version, renders it into the plugin manifest, and attaches the package."
   echo
-  echo "Raw seed bullets (\`- fix: ...\`) must be rewritten before a stable release."
+  echo "Raw seed bullets (\`- fix: ...\`, or a subject ending in a commit sha) must be rewritten before a stable release."
   [ "$promote" = false ] || echo "This PR also merges \`$BETA_BRANCH\` into \`$BASE\` — merge it with a merge commit, not a squash."
   echo
   echo "## Unreleased"
   echo
-  $PLGR notes --changelog "$CHANGELOG" --version Unreleased
+  printf '%s\n' "$notes"
 } > "$body"
 
-gh label create "autorelease: pending" --color FBCA04 --description "Release PR waiting to be merged" --force >/dev/null
-gh label create "autorelease: tagged" --color 0E8A16 --description "Release PR merged and released" --force >/dev/null
+# No labels: the release gate keys off the release/<channel> branch name, and labels would
+# need Issues:write on RELEASE_TOKEN for a purely cosmetic marker.
 pr=$(gh pr list --head "$RB" --base "$BASE" --state open --json number --jq '.[0].number // empty')
 if [ -z "$pr" ]; then
-  gh pr create --head "$RB" --base "$BASE" --title "chore($BASE): release" --body-file "$body" --label "autorelease: pending"
+  gh pr create --head "$RB" --base "$BASE" --title "chore($BASE): release" --body-file "$body"
 else
   gh pr edit "$pr" --body-file "$body" >/dev/null
   echo "updated release PR #$pr"

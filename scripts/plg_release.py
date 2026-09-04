@@ -14,15 +14,18 @@ import time
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 UNRELEASED = "Unreleased"
 VERSION_RE = r"\d{4}\.\d{2}\.\d{2}(?:\.\d+)?"
 # `rest` keeps any heading suffix verbatim (" - title", " and 2024.01.16.1", ...).
 MD_HEADING_RE = re.compile(rf"^## (?P<ver>{VERSION_RE}|{UNRELEASED})(?P<beta> \(beta\))?(?P<rest>(?: .*)?)$")
 PLG_HEADING_RE = re.compile(rf"^###(?P<ver>{VERSION_RE})(?P<rest>(?: .*)?)$")
-RAW_BULLET_RE = re.compile(
-    r"^- (feat|fix|perf|refactor|chore|docs|ci|build|test|style|revert)(\([^)]*\))?!?: ", re.IGNORECASE
+# Both shapes `seed` emits: a conventional-commit subject, or any subject + short sha.
+# An edited bullet cites an issue/PR (`(#63)`), which is not bare hex.
+RAW_BULLET_RES = (
+    re.compile(r"^- (feat|fix|perf|refactor|chore|docs|ci|build|test|style|revert)(\([^)]*\))?!?: ", re.IGNORECASE),
+    re.compile(r"^- .* \([0-9a-f]{7,40}\)$"),
 )
 ENTITY_RE = re.compile(r'<!ENTITY\s+(\w+)\s+"([^"]*)"\s*>')
 PLUGIN_URL_BRANCH_RE = re.compile(r"^https://raw\.githubusercontent\.com/[^/]+/[^/]+/(?P<branch>[^/]+)/")
@@ -150,11 +153,13 @@ def save_changelog(path: Path, log: Changelog) -> None:
 # ---- .plg <CHANGES> --------------------------------------------------------
 
 def _xml_unescape(s: str) -> str:
-    return s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    return s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")  # other entities stay verbatim
 
 
 def _xml_escape(s: str) -> str:
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Escape bare ampersands only, so a declared entity (&name;) survives a migrate/render round trip.
+    s = re.sub(r"&(?!(?:#\d+|#x[0-9a-fA-F]+|\w+);)", "&amp;", s)
+    return s.replace("<", "&lt;").replace(">", "&gt;")
 
 
 def split_plg(text: str) -> tuple[list[str], list[str], list[str]]:
@@ -251,7 +256,8 @@ def fetch_md5(url: str, attempts: int = 3) -> str:
     for attempt in range(1, attempts + 1):
         try:
             with urllib.request.urlopen(url, timeout=60) as resp:
-                return hashlib.md5(resp.read()).hexdigest()
+                # usedforsecurity=False: the .plg format mandates md5; this is integrity, not security.
+                return hashlib.md5(resp.read(), usedforsecurity=False).hexdigest()
         except (OSError, http.client.HTTPException) as e:
             if attempt == attempts:
                 raise OSError(str(e)) from e
@@ -386,7 +392,7 @@ def cmd_check(a) -> int:
     if a.require_nonempty and (section is None or not section.bullets()):
         problems.append("Unreleased section is missing or has no bullets")
     if a.require_edited and section:
-        raw = [b for b in section.bullets() if RAW_BULLET_RE.match(b)]
+        raw = [b for b in section.bullets() if any(r.match(b) for r in RAW_BULLET_RES)]
         if raw:
             problems.append("Unreleased still has unedited seed bullets:\n  " + "\n  ".join(raw))
     if a.verify_asset and not problems:
@@ -480,10 +486,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Exit 0 = ok, 1 = the check found problems, 2 = this command could not run."""
     a = build_parser().parse_args(argv)
     try:
         return a.fn(a)
-    except (ChangelogError, subprocess.CalledProcessError) as e:
+    except subprocess.CalledProcessError as e:
+        print(f"ERROR: {e}\n{(e.stderr or '').strip()}", file=sys.stderr)
+        return 2
+    except (ChangelogError, OSError, ZoneInfoNotFoundError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
 

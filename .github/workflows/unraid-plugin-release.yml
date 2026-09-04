@@ -49,7 +49,7 @@ on:
         value: ${{ jobs.release.outputs.version }}
     secrets:
       RELEASE_TOKEN:
-        description: 'Fine-grained PAT: Contents + Pull requests read/write. Needed so release PRs run CI and pushes bypass required checks.'
+        description: 'Fine-grained PAT, Contents + Pull requests read/write (no Issues scope needed). Release PRs must run CI, and pushes must bypass required checks.'
         required: true
 
 permissions:
@@ -96,6 +96,7 @@ jobs:
           ref: ${{ steps.opsref.outputs.ref }}
           path: ops
           sparse-checkout: scripts
+          persist-credentials: false
 
       - name: Decide channel and mode
         id: decide

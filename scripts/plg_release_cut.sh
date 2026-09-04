@@ -30,7 +30,8 @@ $PLGR stamp --changelog "$CHANGELOG" --version "$version" "${beta_flag[@]}"
 $PLGR render --plg "$PLG" --changelog "$CHANGELOG" --channel "$CHANNEL"
 
 rm -rf dist
-"${BUILD[@]}" --version "$version" --branch "$BASE"
+# env -u GH_TOKEN: the plugin's own build script has no business seeing the release token.
+env -u GH_TOKEN "${BUILD[@]}" --version "$version" --branch "$BASE"
 mapfile -t txz < <(find dist -maxdepth 1 -name '*.txz' -type f)
 [ "${#txz[@]}" -eq 1 ] || { echo "::error::expected exactly one dist/*.txz, found ${#txz[@]}"; exit 1; }
 xmllint --noout "$PLG"
@@ -42,6 +43,9 @@ $PLGR notes --changelog "$CHANGELOG" --version "$version" --footer "Install / up
 
 git add "$PLG" "$CHANGELOG"
 git commit -q -m "chore(release): v$version [skip ci]"
+
+# Before the dry-run exit: later steps consume this output on both paths.
+echo "version=$version" >> "${GITHUB_OUTPUT:-/dev/null}"
 
 if [ "$DRY_RUN" = true ]; then
   echo "::notice::dry run — would push $BASE, tag v$version and publish ${txz[0]}"
@@ -65,9 +69,9 @@ if ! git push -q origin "HEAD:$BASE"; then
   exit 1
 fi
 
+# Non-fatal: the release is already published and verified; a failed courtesy comment must not red the run.
 if [ -n "$PR_NUMBER" ]; then
   url=$(gh release view "v$version" --json url --jq .url)
-  gh pr edit "$PR_NUMBER" --remove-label "autorelease: pending" --add-label "autorelease: tagged" >/dev/null
-  gh pr comment "$PR_NUMBER" --body "Released as [v$version]($url)." >/dev/null
+  gh pr comment "$PR_NUMBER" --body "Released as [v$version]($url)." >/dev/null \
+    || echo "::warning::could not comment on PR #$PR_NUMBER"
 fi
-echo "version=$version" >> "${GITHUB_OUTPUT:-/dev/null}"
