@@ -71,7 +71,7 @@ fi
 
 # Non-fatal: the release is already published and verified; a failed courtesy comment must not red the run.
 if [ -n "$PR_NUMBER" ]; then
-  url=$(gh release view "v$version" --json url --jq .url)
-  gh pr comment "$PR_NUMBER" --body "Released as [v$version]($url)." >/dev/null \
+  { url=$(gh release view "v$version" --json url --jq .url) \
+    && gh pr comment "$PR_NUMBER" --body "Released as [v$version]($url)." >/dev/null; } \
     || echo "::warning::could not comment on PR #$PR_NUMBER"
 fi
