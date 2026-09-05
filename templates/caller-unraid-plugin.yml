@@ -1,7 +1,9 @@
 # Drop into .github/workflows/release.yml of an Unraid plugin repo.
-# Needs: a RELEASE_TOKEN secret (fine-grained PAT, Contents + Pull requests RW),
-# a CHANGELOG.md (migrate with `plg_release.py migrate`), and a pkg_build.sh that
-# accepts --version/--branch and writes dist/<pkg>.txz.
+# Replace PLUGIN.plg with your manifest's path in BOTH places below (the paths filter and
+# plg_file) — editing only one leaves a filter that never matches, so nothing ever triggers.
+# Needs a RELEASE_TOKEN secret (fine-grained PAT, Contents + Pull requests RW), a CHANGELOG.md
+# (migrate with `plg_release.py migrate`), and a pkg_build.sh taking --version/--branch that
+# writes dist/<pkg>.txz. Pin the uses: ref below to a reviewed chodeus-ops commit.
 
 name: Release
 
@@ -11,7 +13,7 @@ on:
     paths:
       - 'src/**'
       - 'pkg_build.sh'
-      - 'folder.view3.plg'
+      - 'PLUGIN.plg'      # <- your manifest
       - 'CHANGELOG.md'
   workflow_dispatch:
     inputs:
@@ -37,9 +39,9 @@ jobs:
   release:
     uses: chodeus/chodeus-ops/.github/workflows/unraid-plugin-release.yml@main
     with:
-      plg_file: folder.view3.plg
+      plg_file: PLUGIN.plg      # <- your manifest, same path as the filter above
       stable_branch: main
-      beta_branch: beta
+      beta_branch: beta         # drop for a single-channel plugin
       mode: ${{ inputs.mode || 'auto' }}
       dry_run: ${{ inputs.dry_run || false }}
     secrets:

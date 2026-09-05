@@ -219,6 +219,7 @@ def _resolve_ops_ref(tmp_path, caller_yaml):
     (f"uses: {USES}@abc1234 # v1.2", "abc1234"),
     (f"uses: {USES}@release/v1+hotfix", "release/v1+hotfix"),
     (f"uses: {USES}@abc1234\r", "abc1234"),
+    (f"uses: {USES}@abc1234\t", "abc1234"),
     ("uses: some/other/workflow.yml@x", "main"),  # no caller line: fall back
 ])
 def test_ops_ref_parsing(tmp_path, value, want):
@@ -228,6 +229,40 @@ def test_ops_ref_parsing(tmp_path, value, want):
 def test_ops_ref_ignores_a_commented_out_uses_line(tmp_path):
     caller = f"jobs:\n  release:\n    # uses: {USES}@stale000\n    uses: {USES}@live111\n"
     assert _resolve_ops_ref(tmp_path, caller) == "live111"
+
+
+def _run_decide(mode, ref_name="main"):
+    """Run the workflow's 'Decide channel and mode' step with the given inputs."""
+    import yaml
+
+    wf = yaml.safe_load((SCRIPTS.parent / ".github/workflows/unraid-plugin-release.yml").read_text())
+    step = next(s for s in wf["jobs"]["release"]["steps"] if s.get("id") == "decide")
+    env = {**os.environ, "STABLE": "main", "BETA": "beta", "MODE_IN": mode,
+           "GITHUB_REF_NAME": ref_name, "GITHUB_OUTPUT": "/dev/null",
+           "GITHUB_REPOSITORY": "chodeus/plugin", "GITHUB_SHA": "deadbeef"}
+    return subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("mode", ["relase", "", "RELEASE", "release; rm -rf /"])
+def test_decide_rejects_an_unsupported_mode(mode):
+    r = _run_decide(mode)
+    assert r.returncode == 1, r.stdout
+    assert "mode must be auto, pr or release" in r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("mode", ["pr", "release"])
+def test_decide_accepts_the_supported_modes(mode):
+    assert _run_decide(mode).returncode == 0
+
+
+def test_cut_rolls_back_a_release_that_never_reached_the_branch():
+    """A failure before the base push must not leave v<version> published."""
+    body = (SCRIPTS / "plg_release_cut.sh").read_text()
+    order = [body.index(t) for t in
+             ("trap rollback EXIT", 'git tag "v$version"', "gh release create",
+              "--verify-asset", 'git push -q origin "HEAD:$BASE"', "published=true", "trap - EXIT")]
+    assert order == sorted(order), "rollback must arm before tagging and disarm only after the base push"
+    assert "gh release delete" in body and "--cleanup-tag" in body
 
 
 def test_cut_script_brackets_the_build_with_deauth_and_auth():

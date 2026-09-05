@@ -58,6 +58,18 @@ if [ "$DRY_RUN" = true ]; then
 fi
 
 # Publish and verify the package first; the served manifest on $BASE only moves once the asset is good.
+# Until that push lands nothing references v$version, so any failure before it rolls the
+# tag and release back rather than leaving a half-published version a re-run would skip.
+published=false
+rollback() {
+  [ "$published" = true ] && return 0
+  echo "::error::release v$version failed before $BASE was updated — removing the tag and release"
+  gh release delete "v$version" --cleanup-tag --yes >/dev/null 2>&1 \
+    || git push -q --delete origin "v$version" >/dev/null 2>&1 \
+    || echo "::warning::could not remove v$version; delete it by hand before re-running"
+}
+trap rollback EXIT
+
 git tag "v$version"
 git push -q origin "v$version"
 
@@ -67,10 +79,9 @@ gh release create "v$version" "${txz[0]}" --title "v$version" --notes-file "$not
 
 $PLGR check --changelog "$CHANGELOG" --plg "$PLG" --channel "$CHANNEL" --branch "$BASE" --verify-asset
 
-if ! git push -q origin "HEAD:$BASE"; then
-  echo "::error::$BASE moved during the release. Delete the release and tag (gh release delete v$version --cleanup-tag) and re-run."
-  exit 1
-fi
+git push -q origin "HEAD:$BASE"
+published=true
+trap - EXIT
 
 # Non-fatal: the release is already published and verified; a failed courtesy comment must not red the run.
 if [ -n "$PR_NUMBER" ]; then

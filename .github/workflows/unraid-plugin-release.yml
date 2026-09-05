@@ -1,10 +1,7 @@
 name: Reusable — Unraid plugin release
 
-# Release-PR model for Unraid plugins. On a push to a channel branch it either
-# refreshes that channel's release PR (seeded changelog bullets you edit) or,
-# when the push is the merge of that PR, cuts the release: stamp the version,
-# render CHANGELOG.md into the .plg CHANGES, build, tag, publish the .txz as a
-# GitHub release asset, verify the served md5. See scripts/plg_release*.
+# A push to a channel branch refreshes that channel's release PR; merging that PR cuts
+# the release. Mechanics live in scripts/plg_release*.
 
 on:
   workflow_call:
@@ -92,9 +89,8 @@ jobs:
           # whole value up to a quote, space or comment so refs like a/b+c stay intact.
           line=$(grep -E "^[[:space:]]*uses:[[:space:]]*['\"]?chodeus/chodeus-ops/\.github/workflows/unraid-plugin-release\.yml@" "repo/$wf" | head -1 || true)
           ref="${line##*@}"
-          ref="${ref%%[\"\' ]*}"
+          ref="${ref%%[\"\'[:space:]]*}"
           ref="${ref%%#*}"
-          ref="${ref%$'\r'}"
           echo "ref=${ref:-main}" >> "$GITHUB_OUTPUT"
           echo "release scripts ref: ${ref:-main}"
 
@@ -115,6 +111,10 @@ jobs:
           MODE_IN: ${{ inputs.mode }}
         run: |
           set -euo pipefail
+          case "$MODE_IN" in
+            auto|pr|release) ;;
+            *) echo "::error::mode must be auto, pr or release (got '$MODE_IN')"; exit 1 ;;
+          esac
           if [ "$GITHUB_REF_NAME" = "$STABLE" ]; then
             ch="stable"
           elif [ -n "$BETA" ] && [ "$GITHUB_REF_NAME" = "$BETA" ]; then

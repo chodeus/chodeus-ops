@@ -13,12 +13,12 @@ git fetch --no-tags origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" "+refs/
 git switch -q -C "$BETA_BRANCH" "origin/$BETA_BRANCH"
 
 if ! git merge --no-ff --no-commit "origin/$BASE" >/dev/null; then
-  for f in $(git diff --name-only --diff-filter=U); do
+  while IFS= read -r -d '' f; do
     case "$f" in
       "$PLG"|"$CHANGELOG") git checkout "origin/$BETA_BRANCH" -- "$f" ;;
       *) echo "::error::merge conflict in $f — merge $BASE into $BETA_BRANCH by hand"; exit 1 ;;
     esac
-  done
+  done < <(git diff -z --name-only --diff-filter=U)
 fi
 git checkout "origin/$BETA_BRANCH" -- "$PLG"
 theirs=$(mktemp)

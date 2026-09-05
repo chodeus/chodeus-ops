@@ -32,13 +32,13 @@ promote=false
 if [ "$CHANNEL" = stable ] && [ -n "$BETA_BRANCH" ] && ! git merge-base --is-ancestor "origin/$BETA_BRANCH" HEAD; then
   promote=true
   if ! git merge --no-ff --no-commit "origin/$BETA_BRANCH" >/dev/null; then
-    for f in $(git diff --name-only --diff-filter=U); do
+    while IFS= read -r -d '' f; do
       case "$f" in
         "$PLG") git checkout "origin/$BASE" -- "$PLG" ;;
         "$CHANGELOG") git checkout "origin/$BASE" -- "$CHANGELOG" ;;
         *) echo "::error::merge conflict in $f — merge $BETA_BRANCH into $BASE by hand, then push $BASE"; exit 1 ;;
       esac
-    done
+    done < <(git diff -z --name-only --diff-filter=U)
   fi
   git checkout "origin/$BASE" -- "$PLG"
   theirs=$(mktemp)
