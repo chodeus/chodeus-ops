@@ -23,7 +23,7 @@ FV3_PLG = """<?xml version="1.0" standalone="yes"?>
 <PLUGIN name="&name;" version="&version;" pluginURL="&pluginURL;">
     <CHANGES>
 
-After updating, hard-refresh your browser &amp; clear cache &lt;now&gt;. See &name; docs.
+After updating, hard-refresh your browser &amp; clear cache &lt;now&gt;.
 
 ###2026.08.28
 - Containers assigned by a label no longer override a folder you picked
@@ -98,7 +98,7 @@ def test_migrate_unescapes_and_keeps_heading_suffixes(fv3):
     plg, changelog = fv3
     run("migrate", "--plg", plg, "--changelog", changelog)
     text = changelog.read_text()
-    assert "browser & clear cache <now>. See &name; docs." in text
+    assert "browser & clear cache <now>." in text
     assert "## 2026.08.14 - Titled release\n" in text
     assert "## 2026.08.01.2 and 2026.08.01.1\n" in text
     assert pr.load_changelog(changelog).find("2026.08.01.2").rest == " and 2026.08.01.1"
@@ -174,20 +174,21 @@ def test_release_token_is_absent_from_git_config_during_the_build(tmp_path):
     subprocess.run(["git", "-C", str(tmp_path), "remote", "add", "origin",
                     "https://github.com/chodeus/plugin.git"], check=True)
     probe = tmp_path / "seen.txt"
-    script = f"""
+    script = """
 set -euo pipefail
-cd {tmp_path}
-. {SCRIPTS}/plg_release_git.sh
+cd "$1"
+. "$2/plg_release_git.sh"
 plg_git_setup
-grep -c 'SEKRIT' .git/config >> {probe} || true   # before: token attached
+grep -c 'SEKRIT' .git/config >> "$3" || true   # before: token attached
 plg_git_deauth
-grep -c 'SEKRIT' .git/config >> {probe} || true   # during the build: must be 0
+grep -c 'SEKRIT' .git/config >> "$3" || true   # during the build: must be 0
 plg_git_auth
-grep -c 'SEKRIT' .git/config >> {probe} || true   # after: reattached for the push
+grep -c 'SEKRIT' .git/config >> "$3" || true   # after: reattached for the push
 """
     env = {**os.environ, "GH_TOKEN": "SEKRIT", "GITHUB_REPOSITORY": "chodeus/plugin",
            "GIT_USER": "chodeus", "GIT_EMAIL": "c@example.com"}
-    subprocess.run(["bash", "-c", script], check=True, env=env, capture_output=True)
+    subprocess.run(["bash", "-c", script, "sh", str(tmp_path), str(SCRIPTS), str(probe)],
+                   check=True, env=env, capture_output=True)
     before, during, after = probe.read_text().split()
     assert (before, during, after) == ("1", "0", "1"), probe.read_text()
 
@@ -220,10 +221,15 @@ def _resolve_ops_ref(tmp_path, caller_yaml):
     (f"uses: {USES}@release/v1+hotfix", "release/v1+hotfix"),
     (f"uses: {USES}@abc1234\r", "abc1234"),
     (f"uses: {USES}@abc1234\t", "abc1234"),
-    ("uses: some/other/workflow.yml@x", "main"),  # no caller line: fall back
 ])
 def test_ops_ref_parsing(tmp_path, value, want):
     assert _resolve_ops_ref(tmp_path, f"jobs:\n  release:\n    {value}\n") == want
+
+
+def test_ops_ref_fails_rather_than_defaulting_to_main(tmp_path):
+    """Guessing a ref would run unreviewed upstream scripts with RELEASE_TOKEN."""
+    with pytest.raises(subprocess.CalledProcessError):
+        _resolve_ops_ref(tmp_path, "jobs:\n  release:\n    uses: some/other/workflow.yml@x\n")
 
 
 def test_ops_ref_ignores_a_commented_out_uses_line(tmp_path):
@@ -255,6 +261,21 @@ def test_decide_accepts_the_supported_modes(mode):
     assert _run_decide(mode).returncode == 0
 
 
+def test_stamp_rejects_a_version_the_parser_would_not_accept(tmp_path):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("# Changelog\n\n## Unreleased\n\n- something\n")
+    for bad in ("1", "v2026.09.05", "2026.9.5", "latest"):
+        assert run("stamp", "--changelog", changelog, "--version", bad) == 2, bad
+    assert "## Unreleased" in changelog.read_text(), "a rejected stamp must not mutate the file"
+    assert run("stamp", "--changelog", changelog, "--version", "2026.09.05") == 0
+
+
+def test_backmerge_tolerates_an_already_merged_base():
+    """A dry-run cut leaves the base already merged, so the back-merge stages nothing."""
+    body = (SCRIPTS / "plg_release_backmerge.sh").read_text()
+    assert "git commit -q --allow-empty" in body
+
+
 def test_cut_names_the_recovery_command_when_publishing_fails():
     """No auto-rollback: a failure between tagging and the base push must say how to undo it."""
     body = (SCRIPTS / "plg_release_cut.sh").read_text()
@@ -262,12 +283,13 @@ def test_cut_names_the_recovery_command_when_publishing_fails():
                                ("trap 'echo", 'git tag "v$version"', 'git push -q origin "HEAD:$BASE"', "trap - ERR"))
     assert trap < tag < push < disarm, "the guidance must be armed before tagging and cleared after the push"
     assert "gh release delete v$version --cleanup-tag" in body
+    assert "git push --delete origin v$version" in body, "the tag-only failure needs its own remedy"
     assert "gh release delete" not in body.split("trap - ERR")[1], "nothing may delete a release automatically"
 
 
-def test_declared_entity_survives_but_bare_ampersand_is_escaped():
-    assert pr._xml_escape("See &name; and &#124; and Tom & Jerry") == "See &name; and &#124; and Tom &amp; Jerry"
-    assert pr._xml_escape("a & b") == "a &amp; b"
+def test_every_ampersand_is_escaped_so_changes_is_always_valid_xml():
+    """Entity-like prose must not survive: &copy; is undeclared and would break the manifest."""
+    assert pr._xml_escape("Tom & Jerry, &copy; 2026") == "Tom &amp; Jerry, &amp;copy; 2026"
 
 
 def test_require_edited_catches_sha_suffixed_seed_bullets(fv3):

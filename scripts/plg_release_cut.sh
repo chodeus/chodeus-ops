@@ -59,7 +59,7 @@ fi
 
 # Publish and verify the package before moving $BASE, so the manifest users fetch only ever
 # points at an asset that checked out. A failure in here needs one command to undo; say which.
-trap 'echo "::error::v$version may be tagged and released while '"$BASE"' is unchanged. Check, then: gh release delete v$version --cleanup-tag --yes"' ERR
+trap 'echo "::error::v$version may be tagged and released while '"$BASE"' is unchanged. Undo with: gh release delete v$version --cleanup-tag --yes  (if no release was created, just the tag: git push --delete origin v$version)"' ERR
 
 git tag "v$version"
 git push -q origin "v$version"

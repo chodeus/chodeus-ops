@@ -91,7 +91,6 @@ def _check_body(version: str, body: list[str]) -> None:
             raise ChangelogError(f"{version}: body line starts with '#', which would parse as a heading: {line!r}")
 
 
-# ---- CHANGELOG.md ----------------------------------------------------------
 
 def parse_changelog(text: str) -> Changelog:
     lines = text.splitlines()
@@ -150,16 +149,13 @@ def save_changelog(path: Path, log: Changelog) -> None:
     path.write_text(format_changelog(log), encoding="utf-8")
 
 
-# ---- .plg <CHANGES> --------------------------------------------------------
 
 def _xml_unescape(s: str) -> str:
-    return s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")  # other entities stay verbatim
+    return s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 
 def _xml_escape(s: str) -> str:
-    # Escape bare ampersands only, so a declared entity (&name;) survives a migrate/render round trip.
-    s = re.sub(r"&(?!(?:#\d+|#x[0-9a-fA-F]+|\w+);)", "&amp;", s)
-    return s.replace("<", "&lt;").replace(">", "&gt;")
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def split_plg(text: str) -> tuple[list[str], list[str], list[str]]:
@@ -231,7 +227,6 @@ def changes_diff(plg: Path, log: Changelog, channel: str) -> str | None:
     return f"CHANGES length differs: plg has {len(current)} lines, expected {len(expected)}"
 
 
-# ---- entities --------------------------------------------------------------
 
 def plg_entities(text: str) -> dict[str, str]:
     ents = dict(ENTITY_RE.findall(text))
@@ -265,7 +260,6 @@ def fetch_md5(url: str, attempts: int = 3) -> str:
     raise OSError("unreachable")
 
 
-# ---- git -------------------------------------------------------------------
 
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout
@@ -295,7 +289,6 @@ def next_version(repo: Path, channel: str, date: str) -> str:
     return f"{date}.{max(suffixes) + 1}"
 
 
-# ---- commands --------------------------------------------------------------
 
 def cmd_migrate(a) -> int:
     if a.changelog.exists() and not a.force:
@@ -353,6 +346,8 @@ def cmd_stamp(a) -> int:
     section = log.unreleased()
     if section is None or (not section.bullets() and not a.allow_empty):
         raise ChangelogError("no Unreleased section with bullets to stamp")
+    if not re.fullmatch(VERSION_RE, a.version):
+        raise ChangelogError(f"version must look like YYYY.MM.DD[.N] (got {a.version!r})")
     if log.find(a.version):
         raise ChangelogError(f"section {a.version} already exists")
     section.version, section.beta = a.version, a.beta

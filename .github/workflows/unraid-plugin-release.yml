@@ -91,8 +91,13 @@ jobs:
           ref="${line##*@}"
           ref="${ref%%[\"\'[:space:]]*}"
           ref="${ref%%#*}"
-          echo "ref=${ref:-main}" >> "$GITHUB_OUTPUT"
-          echo "release scripts ref: ${ref:-main}"
+          # Fail rather than fall back: an unpinned guess would run unreviewed scripts with RELEASE_TOKEN.
+          if [ -z "$ref" ]; then
+            echo "::error::could not read the chodeus-ops ref from repo/$wf — the caller must name this workflow directly in a uses: line"
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "release scripts ref: $ref"
 
       - name: Checkout release scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

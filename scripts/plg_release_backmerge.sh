@@ -27,8 +27,9 @@ $PLGR merge-changelog --ours "$CHANGELOG" --theirs "$theirs" --out "$CHANGELOG"
 $PLGR render --plg "$PLG" --changelog "$CHANGELOG" --channel beta
 $PLGR check --changelog "$CHANGELOG" --plg "$PLG" --channel beta --branch "$BETA_BRANCH"
 
+# --allow-empty: an already-merged base leaves nothing staged, and that is not a failure.
 git add "$PLG" "$CHANGELOG"
-git commit -q -m "chore(release): merge $BASE into $BETA_BRANCH after v$VERSION [skip ci]"
+git commit -q --allow-empty -m "chore(release): merge $BASE into $BETA_BRANCH after v$VERSION [skip ci]"
 
 if [ "$DRY_RUN" = true ]; then
   echo "::notice::dry run — would push $BETA_BRANCH"
