@@ -255,51 +255,14 @@ def test_decide_accepts_the_supported_modes(mode):
     assert _run_decide(mode).returncode == 0
 
 
-def test_remote_has_head_detects_a_push_that_landed(tmp_path):
-    """A push can fail after the remote accepted it; rollback must not fire in that case."""
-    origin, work = tmp_path / "origin.git", tmp_path / "work"
-    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
-    subprocess.run(["git", "clone", "-q", str(origin), str(work)], check=True)
-    git = ["git", "-C", str(work)]
-    subprocess.run([*git, "config", "user.email", "c@example.com"], check=True)
-    subprocess.run([*git, "config", "user.name", "chodeus"], check=True)
-    (work / "f").write_text("1")
-    subprocess.run([*git, "add", "f"], check=True)
-    subprocess.run([*git, "commit", "-qm", "one"], check=True)
-    subprocess.run([*git, "push", "-q", "origin", "HEAD:main"], check=True)
-
-    def has_head():
-        r = subprocess.run(["bash", "-c", f". {SCRIPTS}/plg_release_git.sh; cd {work}; plg_remote_has_head main"],
-                           capture_output=True)
-        return r.returncode == 0
-
-    assert has_head(), "push landed, so rollback must be skipped"
-    (work / "f").write_text("2")
-    subprocess.run([*git, "commit", "-qam", "two"], check=True)
-    assert not has_head(), "push never landed, so rollback must run"
-
-
-def test_rollback_checks_the_remote_before_deleting():
+def test_cut_names_the_recovery_command_when_publishing_fails():
+    """No auto-rollback: a failure between tagging and the base push must say how to undo it."""
     body = (SCRIPTS / "plg_release_cut.sh").read_text()
-    guard, delete = body.index("plg_remote_has_head"), body.index("gh release delete")
-    assert guard < delete, "the remote check must precede the delete"
-
-
-def test_cut_rolls_back_a_release_that_never_reached_the_branch():
-    """A failure before the base push must not leave v<version> published."""
-    body = (SCRIPTS / "plg_release_cut.sh").read_text()
-    order = [body.index(t) for t in
-             ("trap rollback EXIT", 'git tag "v$version"', "gh release create",
-              "--verify-asset", 'git push -q origin "HEAD:$BASE"', "published=true", "trap - EXIT")]
-    assert order == sorted(order), "rollback must arm before tagging and disarm only after the base push"
-    assert "gh release delete" in body and "--cleanup-tag" in body
-
-
-def test_cut_script_brackets_the_build_with_deauth_and_auth():
-    """Ordering guard: a refactor must not reopen the window the test above closes."""
-    body = (SCRIPTS / "plg_release_cut.sh").read_text()
-    deauth, build, auth = (body.index(t) for t in ("plg_git_deauth", '"${BUILD[@]}"', "plg_git_auth\n"))
-    assert deauth < build < auth
+    trap, tag, push, disarm = (body.index(t) for t in
+                               ("trap 'echo", 'git tag "v$version"', 'git push -q origin "HEAD:$BASE"', "trap - ERR"))
+    assert trap < tag < push < disarm, "the guidance must be armed before tagging and cleared after the push"
+    assert "gh release delete v$version --cleanup-tag" in body
+    assert "gh release delete" not in body.split("trap - ERR")[1], "nothing may delete a release automatically"
 
 
 def test_declared_entity_survives_but_bare_ampersand_is_escaped():

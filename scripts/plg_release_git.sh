@@ -19,10 +19,3 @@ plg_git_deauth() {
     [ -n "${GITHUB_REPOSITORY:-}" ] || return 0
     git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
 }
-
-# True when origin/$1 already points at HEAD, i.e. a push landed even though git reported failure.
-plg_remote_has_head() {
-    local remote
-    remote=$(git ls-remote origin "refs/heads/$1" 2>/dev/null | cut -f1)
-    [ -n "$remote" ] && [ "$remote" = "$(git rev-parse HEAD)" ]
-}

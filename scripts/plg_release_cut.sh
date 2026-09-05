@@ -57,24 +57,9 @@ if [ "$DRY_RUN" = true ]; then
   exit 0
 fi
 
-# Publish and verify the package first; the served manifest on $BASE only moves once the asset is good.
-# Until that push lands nothing references v$version, so any failure before it rolls the
-# tag and release back rather than leaving a half-published version a re-run would skip.
-published=false
-rollback() {
-  [ "$published" = true ] && return 0
-  # A push can fail after the remote accepted it; rolling back then would strand the
-  # released manifest on $BASE with no tag or asset behind it.
-  if plg_remote_has_head "$BASE"; then
-    echo "::warning::$BASE already carries v$version — leaving the tag and release in place"
-    return 0
-  fi
-  echo "::error::release v$version failed before $BASE was updated — removing the tag and release"
-  gh release delete "v$version" --cleanup-tag --yes >/dev/null 2>&1 \
-    || git push -q --delete origin "v$version" >/dev/null 2>&1 \
-    || echo "::warning::could not remove v$version; delete it by hand before re-running"
-}
-trap rollback EXIT
+# Publish and verify the package before moving $BASE, so the manifest users fetch only ever
+# points at an asset that checked out. A failure in here needs one command to undo; say which.
+trap 'echo "::error::v$version may be tagged and released while '"$BASE"' is unchanged. Check, then: gh release delete v$version --cleanup-tag --yes"' ERR
 
 git tag "v$version"
 git push -q origin "v$version"
@@ -86,8 +71,7 @@ gh release create "v$version" "${txz[0]}" --title "v$version" --notes-file "$not
 $PLGR check --changelog "$CHANGELOG" --plg "$PLG" --channel "$CHANNEL" --branch "$BASE" --verify-asset
 
 git push -q origin "HEAD:$BASE"
-published=true
-trap - EXIT
+trap - ERR
 
 # Non-fatal: the release is already published and verified; a failed courtesy comment must not red the run.
 if [ -n "$PR_NUMBER" ]; then
