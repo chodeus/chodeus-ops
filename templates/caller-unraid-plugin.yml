@@ -34,7 +34,7 @@ concurrency:
 jobs:
   release:
     # Pin to a reviewed chodeus-ops commit — @main would run upstream changes with RELEASE_TOKEN.
-    uses: chodeus/chodeus-ops/.github/workflows/unraid-plugin-release.yml@REPLACE_WITH_REVIEWED_SHA
+    uses: chodeus/chodeus-ops/.github/workflows/unraid-plugin-release.yml@5c3687a2f488fdd69f89c36c98e790203e603109 # main
     with:
       plg_file: PLUGIN.plg      # <- your manifest, same path as the filter above
       stable_branch: main
