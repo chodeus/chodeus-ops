@@ -63,6 +63,12 @@ fi
 published=false
 rollback() {
   [ "$published" = true ] && return 0
+  # A push can fail after the remote accepted it; rolling back then would strand the
+  # released manifest on $BASE with no tag or asset behind it.
+  if plg_remote_has_head "$BASE"; then
+    echo "::warning::$BASE already carries v$version — leaving the tag and release in place"
+    return 0
+  fi
   echo "::error::release v$version failed before $BASE was updated — removing the tag and release"
   gh release delete "v$version" --cleanup-tag --yes >/dev/null 2>&1 \
     || git push -q --delete origin "v$version" >/dev/null 2>&1 \

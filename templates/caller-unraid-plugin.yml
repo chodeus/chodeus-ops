@@ -1,9 +1,5 @@
-# Drop into .github/workflows/release.yml of an Unraid plugin repo.
-# Replace PLUGIN.plg with your manifest's path in BOTH places below (the paths filter and
-# plg_file) — editing only one leaves a filter that never matches, so nothing ever triggers.
-# Needs a RELEASE_TOKEN secret (fine-grained PAT, Contents + Pull requests RW), a CHANGELOG.md
-# (migrate with `plg_release.py migrate`), and a pkg_build.sh taking --version/--branch that
-# writes dist/<pkg>.txz. Pin the uses: ref below to a reviewed chodeus-ops commit.
+# Caller for the Unraid plugin release flow. Replace PLUGIN.plg in BOTH places below.
+# Prerequisites, inputs and secrets: .github/workflows/unraid-plugin-release.yml.
 
 name: Release
 
@@ -37,7 +33,8 @@ concurrency:
 
 jobs:
   release:
-    uses: chodeus/chodeus-ops/.github/workflows/unraid-plugin-release.yml@main
+    # Pin to a reviewed chodeus-ops commit — @main would run upstream changes with RELEASE_TOKEN.
+    uses: chodeus/chodeus-ops/.github/workflows/unraid-plugin-release.yml@REPLACE_WITH_REVIEWED_SHA
     with:
       plg_file: PLUGIN.plg      # <- your manifest, same path as the filter above
       stable_branch: main

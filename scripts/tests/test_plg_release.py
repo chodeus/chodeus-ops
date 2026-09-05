@@ -255,6 +255,36 @@ def test_decide_accepts_the_supported_modes(mode):
     assert _run_decide(mode).returncode == 0
 
 
+def test_remote_has_head_detects_a_push_that_landed(tmp_path):
+    """A push can fail after the remote accepted it; rollback must not fire in that case."""
+    origin, work = tmp_path / "origin.git", tmp_path / "work"
+    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+    subprocess.run(["git", "clone", "-q", str(origin), str(work)], check=True)
+    git = ["git", "-C", str(work)]
+    subprocess.run([*git, "config", "user.email", "c@example.com"], check=True)
+    subprocess.run([*git, "config", "user.name", "chodeus"], check=True)
+    (work / "f").write_text("1")
+    subprocess.run([*git, "add", "f"], check=True)
+    subprocess.run([*git, "commit", "-qm", "one"], check=True)
+    subprocess.run([*git, "push", "-q", "origin", "HEAD:main"], check=True)
+
+    def has_head():
+        r = subprocess.run(["bash", "-c", f". {SCRIPTS}/plg_release_git.sh; cd {work}; plg_remote_has_head main"],
+                           capture_output=True)
+        return r.returncode == 0
+
+    assert has_head(), "push landed, so rollback must be skipped"
+    (work / "f").write_text("2")
+    subprocess.run([*git, "commit", "-qam", "two"], check=True)
+    assert not has_head(), "push never landed, so rollback must run"
+
+
+def test_rollback_checks_the_remote_before_deleting():
+    body = (SCRIPTS / "plg_release_cut.sh").read_text()
+    guard, delete = body.index("plg_remote_has_head"), body.index("gh release delete")
+    assert guard < delete, "the remote check must precede the delete"
+
+
 def test_cut_rolls_back_a_release_that_never_reached_the_branch():
     """A failure before the base push must not leave v<version> published."""
     body = (SCRIPTS / "plg_release_cut.sh").read_text()
