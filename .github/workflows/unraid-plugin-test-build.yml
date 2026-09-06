@@ -44,8 +44,8 @@ env:
 jobs:
   test-build:
     runs-on: ubuntu-latest
-    # Serialised per repository: the cleanup below removes every older test pre-release, so two
-    # overlapping runs must not be able to remove each other's build.
+    # Serialised per repository: the cleanup below removes every other test pre-release, so runs must
+    # not overlap, and a pending run replaced by a newer one only skips a build the newer would remove.
     concurrency:
       group: plg-test-build-${{ github.repository }}
       cancel-in-progress: false

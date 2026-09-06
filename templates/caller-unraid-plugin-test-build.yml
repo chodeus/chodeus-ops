@@ -14,8 +14,8 @@ on:
 permissions:
   contents: read
 
-# Each build publishes its own test-<version> pre-release and removes older ones; runs are queued so
-# one build's cleanup can never remove another's.
+# Each build publishes its own test-<version> pre-release and removes the others, so runs never overlap
+# and a pending run replaced by a newer one only skips a build the newer would remove anyway.
 concurrency:
   group: plg-test-build
   cancel-in-progress: false
