@@ -1,0 +1,32 @@
+# Caller for on-demand test builds of an Unraid plugin. Replace PLUGIN.plg below.
+# Run it from the Actions tab on the branch to test; the run summary shows the install URL.
+# Inputs and mechanics: .github/workflows/unraid-plugin-test-build.yml.
+
+name: Test build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Optional YYYY.MM.DD[.N]. Empty = yesterday + .9<run>, which installs over the current release and is replaced by the next one.'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+# One rolling pre-release per repo; two runs at once would race to replace it.
+concurrency:
+  group: plg-test-build
+  cancel-in-progress: false
+
+jobs:
+  test-build:
+    # The called workflow can use at most what this job grants: it needs to replace the pre-release and its tag.
+    permissions:
+      contents: write
+    # Pin to a reviewed chodeus-ops commit.
+    uses: chodeus/chodeus-ops/.github/workflows/unraid-plugin-test-build.yml@main
+    with:
+      plg_file: PLUGIN.plg      # <- your manifest
+      version: ${{ inputs.version || '' }}

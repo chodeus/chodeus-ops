@@ -1,0 +1,151 @@
+name: Reusable — Unraid plugin test build
+
+# Builds the plugin from the dispatched ref and publishes it as ONE rolling pre-release, so the
+# manifest can be pasted into Plugins > Install Plugin on a test server. Nothing on a release
+# channel moves: no branch push, no v-tag, and pluginURL stays on the branch that was built.
+
+on:
+  workflow_call:
+    inputs:
+      plg_file:
+        description: 'Path to the .plg manifest, relative to repo root.'
+        required: true
+        type: string
+      build_cmd:
+        description: 'Build command; receives --version <v> --branch <b> and must write dist/<pkg>.txz.'
+        type: string
+        default: 'bash pkg_build.sh'
+      tz:
+        type: string
+        default: Australia/Perth
+      release_tag:
+        description: 'Pre-release (and tag) that every test build replaces.'
+        type: string
+        default: test
+      version:
+        description: 'YYYY.MM.DD[.N]. Empty = yesterday + .9<run number>, which beats the installed release and loses to the next one.'
+        type: string
+        default: ''
+    outputs:
+      version:
+        value: ${{ jobs.test-build.outputs.version }}
+      install_url:
+        value: ${{ jobs.test-build.outputs.install_url }}
+
+permissions:
+  contents: read
+
+env:
+  PLG: ${{ inputs.plg_file }}
+  BUILD_CMD: ${{ inputs.build_cmd }}
+  TZ: ${{ inputs.tz }}
+  TAG: ${{ inputs.release_tag }}
+  VERSION_IN: ${{ inputs.version }}
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  test-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      install_url: ${{ steps.publish.outputs.install_url }}
+    steps:
+      - name: Checkout plugin repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Pick the version
+        id: ver
+        run: |
+          set -euo pipefail
+          if [ -n "$VERSION_IN" ]; then
+            version="$VERSION_IN"
+          else
+            version="$(date -d yesterday +%Y.%m.%d).$(printf '9%04d' "$GITHUB_RUN_NUMBER")"
+          fi
+          # The manifest's pre-install script interpolates the version into a shell glob.
+          [[ "$version" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]] \
+            || { echo "::error::version must be YYYY.MM.DD or YYYY.MM.DD.N (got '$version')"; exit 1; }
+          [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::release_tag must be a plain tag name (got '$TAG')"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "version $version"
+
+      - name: Build the package
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          read -ra build <<< "$BUILD_CMD"
+          "${build[@]}" --version "$VERSION" --branch "$GITHUB_REF_NAME"
+          mapfile -t txz < <(find dist -maxdepth 1 -name '*.txz' -type f)
+          [ "${#txz[@]}" -eq 1 ] || { echo "::error::expected exactly one dist/*.txz, found ${#txz[@]}"; exit 1; }
+
+      - name: Install xmllint
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-utils
+
+      - name: Point the manifest at the test asset
+        run: |
+          set -euo pipefail
+          # The build set version, md5 and pluginURL; only the package URL moves to the rolling tag.
+          sed -i "s#/releases/download/v&version;/#/releases/download/$TAG/#" "$PLG"
+          grep -q "/releases/download/$TAG/" "$PLG" || { echo "::error::package URL in $PLG did not match the releases/download/v&version; form"; exit 1; }
+          xmllint --noout "$PLG"
+          cp "$PLG" "dist/$(basename "$PLG")"
+
+      - name: Publish the rolling pre-release
+        id: publish
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          plg="$(basename "$PLG")"
+          txz=$(find dist -maxdepth 1 -name '*.txz' -type f)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release delete "$TAG" --cleanup-tag --yes
+          elif gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG"
+          fi
+          install_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$plg"
+          notes=$(mktemp)
+          {
+            echo "Test build of \`$GITHUB_REF_NAME\` at $GITHUB_SHA. Not a release: every test build replaces this one, and the next real release supersedes it through Check for Updates."
+            echo
+            echo "Install: Plugins > Install Plugin > paste \`$install_url\`"
+          } > "$notes"
+          gh release create "$TAG" "$txz" "dist/$plg" --target "$GITHUB_SHA" --prerelease \
+            --title "Test build $VERSION (${GITHUB_SHA::7}, $GITHUB_REF_NAME)" --notes-file "$notes"
+          echo "install_url=$install_url" >> "$GITHUB_OUTPUT"
+
+      - name: Verify what a server will fetch
+        env:
+          INSTALL_URL: ${{ steps.publish.outputs.install_url }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          plg="$(basename "$PLG")"
+          want=$(grep -o 'ENTITY md5 *"[^"]*"' "$PLG" | grep -o '"[^"]*"' | tr -d '"')
+          txz_url="${INSTALL_URL%/*}/$(basename "$(find dist -maxdepth 1 -name '*.txz' -type f)")"
+          # Assets take a few seconds to serve after a release is created.
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsSL -o /tmp/got.plg "$INSTALL_URL" && curl -fsSL -o /tmp/got.txz "$txz_url"; then break; fi
+            [ "$attempt" -lt 6 ] || { echo "::error::assets not downloadable after $attempt attempts"; exit 1; }
+            sleep 10
+          done
+          cmp -s /tmp/got.plg "dist/$plg" || { echo "::error::served manifest differs from the built one"; exit 1; }
+          got=$(md5sum /tmp/got.txz | cut -d' ' -f1)
+          [ "$got" = "$want" ] || { echo "::error::served package md5 $got does not match the manifest's $want"; exit 1; }
+          {
+            echo "## Test build $VERSION"
+            echo
+            echo "Built from \`$GITHUB_REF_NAME\` at \`${GITHUB_SHA::7}\`. Package md5 \`$want\` verified from the release URL."
+            echo
+            echo "Install on a server: **Plugins > Install Plugin** and paste"
+            echo
+            echo '```'
+            echo "$INSTALL_URL"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::install URL: $INSTALL_URL"
