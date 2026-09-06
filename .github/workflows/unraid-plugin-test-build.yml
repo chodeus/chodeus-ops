@@ -1,7 +1,7 @@
 name: Reusable — Unraid plugin test build
 
-# Builds the dispatched ref into ONE rolling pre-release whose manifest URL can be pasted into
-# Plugins > Install Plugin. No branch push, no v-tag, and pluginURL stays on the built branch.
+# Builds the dispatched ref into a pre-release tagged <release_tag>-<version> whose manifest URL can be
+# pasted into Plugins > Install Plugin. No branch push, no v-tag, and pluginURL stays on the built branch.
 
 on:
   workflow_call:
@@ -18,11 +18,11 @@ on:
         type: string
         default: Australia/Perth
       release_tag:
-        description: 'Pre-release (and tag) that every test build replaces.'
+        description: 'Tag prefix for test pre-releases; each build gets <prefix>-<version> and older ones are removed.'
         type: string
         default: test
       version:
-        description: 'YYYY.MM.DD[.N]. Empty = yesterday + .9<run number>, which beats the installed release and loses to the next one.'
+        description: 'YYYY.MM.DD[.N]. Empty = yesterday + .9<UTC build time>, which beats the installed release and loses to the next one.'
         type: string
         default: ''
     outputs:
@@ -44,6 +44,11 @@ env:
 jobs:
   test-build:
     runs-on: ubuntu-latest
+    # Serialised per repository: the cleanup below removes every other test pre-release, so runs must
+    # not overlap, and a pending run replaced by a newer one only skips a build the newer would remove.
+    concurrency:
+      group: plg-test-build-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       contents: write
     outputs:
@@ -62,7 +67,9 @@ jobs:
           if [ -n "$VERSION_IN" ]; then
             version="$VERSION_IN"
           else
-            version="$(date -d yesterday +%Y.%m.%d).$(printf '9%04d' "$GITHUB_RUN_NUMBER")"
+            # yesterday's date keeps a same-day real release newer; the UTC time orders same-day builds
+            # under strcmp (the concurrency group runs them one at a time) and gives a re-run its own tag
+            version="$(date -u -d yesterday +%Y.%m.%d.9%H%M%S)"
           fi
           # The manifest's pre-install script interpolates the version into a shell glob.
           [[ "$version" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]] \
@@ -85,15 +92,18 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-utils
 
       - name: Point the manifest at the test asset
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          # The build set version, md5 and pluginURL; only the package URL moves to the rolling tag.
-          sed -i "s#/releases/download/v&version;/#/releases/download/$TAG/#" "$PLG"
-          grep -Fq "/releases/download/$TAG/" "$PLG" || { echo "::error::$PLG package URL was not rewritten to /releases/download/$TAG/: the manifest must use the releases/download/v&version; form"; exit 1; }
+          # A tag per build keeps every download URL unique: GitHub caches the tag+filename lookup, so a
+          # reused name kept serving the previous build for minutes after it was replaced.
+          sed -i "s#/releases/download/v&version;/#/releases/download/$TAG-$VERSION/#" "$PLG"
+          grep -Fq "/releases/download/$TAG-$VERSION/" "$PLG" || { echo "::error::$PLG package URL was not rewritten to /releases/download/$TAG-$VERSION/: the manifest must use the releases/download/v&version; form"; exit 1; }
           xmllint --noout "$PLG"
           cp "$PLG" "dist/$(basename "$PLG")"
 
-      - name: Publish the rolling pre-release
+      - name: Publish the pre-release
         id: publish
         env:
           # Only this step gets the write token: the build runs the dispatched branch's own script.
@@ -103,21 +113,29 @@ jobs:
           set -euo pipefail
           plg="$(basename "$PLG")"
           txz=$(find dist -maxdepth 1 -name '*.txz' -type f)
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release delete "$TAG" --cleanup-tag --yes
-          elif gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
-            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG"
+          tag="$TAG-$VERSION"
+          install_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$plg"
+          # gh release create ignores --target for an existing tag, so delete the release AND the tag first.
+          # Only a manual version override may meet one: runs never overlap, so an automatic version that does is a bug.
+          if gh release view "$tag" >/dev/null 2>&1 || gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+            [ -n "$VERSION_IN" ] || { echo "::error::$tag already exists although the version was automatic: runs overlapped"; exit 1; }
+            if gh release view "$tag" >/dev/null 2>&1; then gh release delete "$tag" --cleanup-tag --yes; fi
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"; fi
           fi
-          install_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$plg"
           notes=$(mktemp)
           {
-            echo "Test build of \`$GITHUB_REF_NAME\` at $GITHUB_SHA. Not a release: every test build replaces this one, and the next real release supersedes it through Check for Updates."
+            echo "Test build of \`$GITHUB_REF_NAME\` at $GITHUB_SHA. Not a release: the next test build removes this one, and the next real release supersedes it through Check for Updates."
             echo
             echo "Install: Plugins > Install Plugin > paste \`$install_url\`"
           } > "$notes"
-          gh release create "$TAG" "$txz" "dist/$plg" --target "$GITHUB_SHA" --prerelease \
+          gh release create "$tag" "$txz" "dist/$plg" --target "$GITHUB_SHA" --prerelease \
             --title "Test build $VERSION (${GITHUB_SHA::7}, $GITHUB_REF_NAME)" --notes-file "$notes"
           echo "install_url=$install_url" >> "$GITHUB_OUTPUT"
+          # Older test builds go only after the new one exists. Real releases are tagged v<version>,
+          # so the prefix cannot match them; a bare "$TAG" release is the pre-2026-09 rolling one.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq ".[] | select(.prerelease and .tag_name != \"$tag\" and (.tag_name == \"$TAG\" or (.tag_name | startswith(\"$TAG-\")))) | .tag_name" \
+            | while read -r old; do gh release delete "$old" --cleanup-tag --yes; echo "removed $old"; done
 
       - name: Verify what a server will fetch
         env:
