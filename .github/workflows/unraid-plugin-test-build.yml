@@ -96,7 +96,6 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          # The build set version, md5 and pluginURL; only the package URL moves to this build's tag.
           # A tag per build keeps every download URL unique: GitHub caches the tag+filename lookup, so a
           # reused name kept serving the previous build for minutes after it was replaced.
           sed -i "s#/releases/download/v&version;/#/releases/download/$TAG-$VERSION/#" "$PLG"
@@ -116,10 +115,13 @@ jobs:
           txz=$(find dist -maxdepth 1 -name '*.txz' -type f)
           tag="$TAG-$VERSION"
           install_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$plg"
-          # Only a manual version override can meet an existing tag. gh release create ignores --target
-          # for an existing tag, so remove both the release and the tag first.
-          if gh release view "$tag" >/dev/null 2>&1; then gh release delete "$tag" --cleanup-tag --yes; fi
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"; fi
+          # gh release create ignores --target for an existing tag, so delete the release AND the tag first.
+          # Only a manual version override may meet one: runs never overlap, so an automatic version that does is a bug.
+          if gh release view "$tag" >/dev/null 2>&1 || gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+            [ -n "$VERSION_IN" ] || { echo "::error::$tag already exists although the version was automatic: runs overlapped"; exit 1; }
+            if gh release view "$tag" >/dev/null 2>&1; then gh release delete "$tag" --cleanup-tag --yes; fi
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"; fi
+          fi
           notes=$(mktemp)
           {
             echo "Test build of \`$GITHUB_REF_NAME\` at $GITHUB_SHA. Not a release: the next test build removes this one, and the next real release supersedes it through Check for Updates."
