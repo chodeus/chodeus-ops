@@ -89,7 +89,7 @@ jobs:
           set -euo pipefail
           # The build set version, md5 and pluginURL; only the package URL moves to the rolling tag.
           sed -i "s#/releases/download/v&version;/#/releases/download/$TAG/#" "$PLG"
-          grep -Fq "/releases/download/$TAG/" "$PLG" || { echo "::error::package URL in $PLG did not match the releases/download/v&version; form"; exit 1; }
+          grep -Fq "/releases/download/$TAG/" "$PLG" || { echo "::error::$PLG package URL was not rewritten to /releases/download/$TAG/: the manifest must use the releases/download/v&version; form"; exit 1; }
           xmllint --noout "$PLG"
           cp "$PLG" "dist/$(basename "$PLG")"
 
