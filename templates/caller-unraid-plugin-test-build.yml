@@ -1,6 +1,5 @@
-# Caller for on-demand test builds of an Unraid plugin. Replace PLUGIN.plg below.
-# Run it from the Actions tab on the branch to test; the run summary shows the install URL.
-# Inputs and mechanics: .github/workflows/unraid-plugin-test-build.yml.
+# Caller for on-demand test builds of an Unraid plugin: replace PLUGIN.plg below, then run it from
+# the Actions tab on the branch to test. Inputs: .github/workflows/unraid-plugin-test-build.yml.
 
 name: Test build
 

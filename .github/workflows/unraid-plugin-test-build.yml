@@ -1,8 +1,7 @@
 name: Reusable — Unraid plugin test build
 
-# Builds the plugin from the dispatched ref and publishes it as ONE rolling pre-release, so the
-# manifest can be pasted into Plugins > Install Plugin on a test server. Nothing on a release
-# channel moves: no branch push, no v-tag, and pluginURL stays on the branch that was built.
+# Builds the dispatched ref into ONE rolling pre-release whose manifest URL can be pasted into
+# Plugins > Install Plugin. No branch push, no v-tag, and pluginURL stays on the built branch.
 
 on:
   workflow_call:
@@ -41,7 +40,6 @@ env:
   TZ: ${{ inputs.tz }}
   TAG: ${{ inputs.release_tag }}
   VERSION_IN: ${{ inputs.version }}
-  GH_TOKEN: ${{ github.token }}
 
 jobs:
   test-build:
@@ -91,13 +89,15 @@ jobs:
           set -euo pipefail
           # The build set version, md5 and pluginURL; only the package URL moves to the rolling tag.
           sed -i "s#/releases/download/v&version;/#/releases/download/$TAG/#" "$PLG"
-          grep -q "/releases/download/$TAG/" "$PLG" || { echo "::error::package URL in $PLG did not match the releases/download/v&version; form"; exit 1; }
+          grep -Fq "/releases/download/$TAG/" "$PLG" || { echo "::error::package URL in $PLG did not match the releases/download/v&version; form"; exit 1; }
           xmllint --noout "$PLG"
           cp "$PLG" "dist/$(basename "$PLG")"
 
       - name: Publish the rolling pre-release
         id: publish
         env:
+          # Only this step gets the write token: the build runs the dispatched branch's own script.
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
@@ -130,7 +130,8 @@ jobs:
           txz_url="${INSTALL_URL%/*}/$(basename "$(find dist -maxdepth 1 -name '*.txz' -type f)")"
           # Assets take a few seconds to serve after a release is created.
           for attempt in 1 2 3 4 5 6; do
-            if curl -fsSL -o /tmp/got.plg "$INSTALL_URL" && curl -fsSL -o /tmp/got.txz "$txz_url"; then break; fi
+            if curl --connect-timeout 15 --max-time 120 -fsSL -o /tmp/got.plg "$INSTALL_URL" \
+               && curl --connect-timeout 15 --max-time 120 -fsSL -o /tmp/got.txz "$txz_url"; then break; fi
             [ "$attempt" -lt 6 ] || { echo "::error::assets not downloadable after $attempt attempts"; exit 1; }
             sleep 10
           done
