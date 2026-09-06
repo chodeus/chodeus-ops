@@ -7,21 +7,22 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Optional YYYY.MM.DD[.N]. Empty = yesterday + .9<run>, which installs over the current release and is replaced by the next one.'
+        description: 'Optional YYYY.MM.DD[.N]. Empty = yesterday + .9<run><attempt>, which installs over the current release and is superseded by the next one.'
         type: string
         default: ''
 
 permissions:
   contents: read
 
-# One rolling pre-release per repo; two runs at once would race to replace it.
+# Each build publishes its own test-<version> pre-release and removes older ones; runs are queued so
+# one build's cleanup can never remove another's.
 concurrency:
   group: plg-test-build
   cancel-in-progress: false
 
 jobs:
   test-build:
-    # The called workflow can use at most what this job grants: it needs to replace the pre-release and its tag.
+    # The called workflow can use at most what this job grants: it publishes the pre-release and removes older ones.
     permissions:
       contents: write
     # Pin to a reviewed chodeus-ops commit.

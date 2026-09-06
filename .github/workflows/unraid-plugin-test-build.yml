@@ -44,6 +44,11 @@ env:
 jobs:
   test-build:
     runs-on: ubuntu-latest
+    # Serialised per repository: the cleanup below removes every older test pre-release, so two
+    # overlapping runs must not be able to remove each other's build.
+    concurrency:
+      group: plg-test-build-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       contents: write
     outputs:
@@ -62,8 +67,9 @@ jobs:
           if [ -n "$VERSION_IN" ]; then
             version="$VERSION_IN"
           else
-            # run number plus attempt: a re-run of the same run gets its own version, tag and URL
-            version="$(date -d yesterday +%Y.%m.%d).$(printf '9%04d%d' "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT")"
+            # run number plus attempt, both fixed width so versions stay ordered; a re-run gets its own tag and URL
+            [ "$GITHUB_RUN_ATTEMPT" -lt 100 ] || { echo "::error::run attempt must be below 100 to keep the version ordered"; exit 1; }
+            version="$(date -d yesterday +%Y.%m.%d).$(printf '9%04d%02d' "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT")"
           fi
           # The manifest's pre-install script interpolates the version into a shell glob.
           [[ "$version" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]] \
@@ -110,8 +116,11 @@ jobs:
           txz=$(find dist -maxdepth 1 -name '*.txz' -type f)
           tag="$TAG-$VERSION"
           install_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$plg"
-          # Only a manual version override can meet an existing tag; replace it rather than fail.
+          # Only a manual version override can meet an existing tag. Remove the release AND the tag:
+          # gh release create ignores --target for a tag that already exists, which would publish
+          # this build's assets against an older commit.
           if gh release view "$tag" >/dev/null 2>&1; then gh release delete "$tag" --cleanup-tag --yes; fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"; fi
           notes=$(mktemp)
           {
             echo "Test build of \`$GITHUB_REF_NAME\` at $GITHUB_SHA. Not a release: the next test build removes this one, and the next real release supersedes it through Check for Updates."
