@@ -25,19 +25,33 @@
   },
   "packageRules": [
     {
-      "description": "Auto-merge minor + patch + pin updates after CI passes (minors added 2026-07-21 once required status checks landed fleet-wide). Dockerfile digest bumps stay manual — a broken base-image digest already broke main once (see commit 513b008). docker-compose digests auto-merge via the rule below (docs-example pins, no runtime impact); github-actions digest bumps are NOT auto-merged so a repointed/compromised action SHA still gets a review PR.",
+      "description": "Auto-merge minor + patch + pin updates after CI passes (minors added 2026-07-21 once required status checks landed fleet-wide). Dockerfile digest bumps stay manual — a broken base-image digest already broke main once (see commit 513b008). GitHub Actions digests auto-merge after a 7-day release age (rule below); docker-compose digests auto-merge via the rule below.",
       "matchUpdateTypes": ["minor", "patch", "pin"],
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
     },
     {
-      "description": "Auto-merge digest bumps for docker-compose only (compose.yaml/docker-compose.yml example pins — docs surface, never executed in CI or production). github-actions digests are deliberately NOT auto-merged: SHA-pinning exists to force human review of upstream action changes, and a repointed or compromised tag re-resolves to a new SHA that still passes CI, so those bumps must get a review PR (the old 'broken SHA = action-not-found' rationale only caught deleted SHAs, not malicious ones). Dockerfile FROM digests are also excluded — those drive every build and have caused breakage before. Per-repo opt-outs (e.g. BeatsCheck's chodeus/chodeus-ops carve-out) still take precedence.",
+      "description": "Auto-merge digest bumps for docker-compose (compose.yaml/docker-compose.yml example pins — docs surface, never executed in CI or production). Dockerfile FROM digests are excluded — those drive every build and have caused breakage before.",
       "matchManagers": ["docker-compose"],
       "matchUpdateTypes": ["digest"],
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
+    },
+    {
+      "description": "Auto-merge GitHub Actions digest bumps once the upstream commit is at least 7 days old. A repointed or compromised tag is normally noticed and reverted within days, and the check a human can do on a SHA (does it match the tag?) is exactly what Renovate already did when it resolved the digest, so waiting is the defence, not the review. chodeus-ops is excluded by the rule below.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["digest"],
+      "minimumReleaseAge": "7 days",
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Never let Renovate touch a chodeus/chodeus-ops reusable-workflow pin. Those pins are rollout decisions bumped by hand when a shared workflow changes, and Renovate's lagging view of main has already proposed rolling a fresh pin back (appdata.cleanup.ng#7, BeatsCheck#26).",
+      "matchDepNames": ["chodeus/chodeus-ops"],
+      "enabled": false
     },
     {
       "description": "Keep pydantic + pydantic-core in lockstep. pydantic strictly pins pydantic-core in its metadata, so bumping one without the other yields an unresolvable PR.",
