@@ -98,6 +98,9 @@ body=$(mktemp)
   echo "Merge this PR to cut the next **$CHANNEL** release. Edit the Unreleased section of \`$CHANGELOG\` on this branch first; the release job stamps the version, renders it into the plugin manifest, and attaches the package."
   echo
   echo "Raw seed bullets (\`- fix: ...\`, or a subject ending in a commit sha) must be rewritten before a stable release."
+  echo
+  # generated PR: the release check enforces the changelog rules, so keep CodeRabbit off it
+  echo "@coderabbitai ignore"
   [ "$promote" = false ] || echo "This PR also merges \`$BETA_BRANCH\` into \`$BASE\` — merge it with a merge commit, not a squash."
   echo
   echo "## Unreleased"
