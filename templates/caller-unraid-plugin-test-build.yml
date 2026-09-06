@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Optional YYYY.MM.DD[.N]. Empty = yesterday + .9<run><attempt>, which installs over the current release and is superseded by the next one.'
+        description: 'Optional YYYY.MM.DD[.N]. Empty = yesterday + .9<UTC build time>, which installs over the current release and is superseded by the next one.'
         type: string
         default: ''
 

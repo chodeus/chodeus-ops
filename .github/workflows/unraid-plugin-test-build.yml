@@ -22,7 +22,7 @@ on:
         type: string
         default: test
       version:
-        description: 'YYYY.MM.DD[.N]. Empty = yesterday + .9<run number><attempt>, which beats the installed release and loses to the next one.'
+        description: 'YYYY.MM.DD[.N]. Empty = yesterday + .9<UTC build time>, which beats the installed release and loses to the next one.'
         type: string
         default: ''
     outputs:
@@ -67,9 +67,9 @@ jobs:
           if [ -n "$VERSION_IN" ]; then
             version="$VERSION_IN"
           else
-            # run number plus attempt, both fixed width so versions stay ordered; a re-run gets its own tag and URL
-            [ "$GITHUB_RUN_ATTEMPT" -lt 100 ] || { echo "::error::run attempt must be below 100 to keep the version ordered"; exit 1; }
-            version="$(date -d yesterday +%Y.%m.%d).$(printf '9%04d%02d' "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT")"
+            # yesterday's date keeps a same-day real release newer; the UTC time orders same-day builds
+            # under strcmp (the concurrency group runs them one at a time) and gives a re-run its own tag
+            version="$(date -u -d yesterday +%Y.%m.%d.9%H%M%S)"
           fi
           # The manifest's pre-install script interpolates the version into a shell glob.
           [[ "$version" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]] \
@@ -116,9 +116,8 @@ jobs:
           txz=$(find dist -maxdepth 1 -name '*.txz' -type f)
           tag="$TAG-$VERSION"
           install_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$plg"
-          # Only a manual version override can meet an existing tag. Remove the release AND the tag:
-          # gh release create ignores --target for a tag that already exists, which would publish
-          # this build's assets against an older commit.
+          # Only a manual version override can meet an existing tag. gh release create ignores --target
+          # for an existing tag, so remove both the release and the tag first.
           if gh release view "$tag" >/dev/null 2>&1; then gh release delete "$tag" --cleanup-tag --yes; fi
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"; fi
           notes=$(mktemp)
