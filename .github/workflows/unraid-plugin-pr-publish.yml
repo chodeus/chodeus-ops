@@ -27,6 +27,10 @@ on:
         description: 'Label a maintainer adds to ask for a build; removed after publishing.'
         type: string
         default: test-build
+      plg_file:
+        description: 'Path to the .plg manifest, relative to repo root; its pluginURL on the base branch is the trusted one.'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -37,6 +41,7 @@ env:
   HEAD: ${{ inputs.head_owner }}:${{ inputs.head_branch }}
   HEAD_SHA: ${{ inputs.head_sha }}
   LABEL: ${{ inputs.label }}
+  PLG_PATH: ${{ inputs.plg_file }}
   MARKER: '<!-- pr-build -->'
 
 jobs:
@@ -75,6 +80,10 @@ jobs:
           github-token: ${{ github.token }}
           path: dist
 
+      - name: Install xmllint
+        if: steps.pr.outputs.number != ''
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-utils
+
       - name: Check the build against the pull request
         if: steps.pr.outputs.number != ''
         id: meta
@@ -95,6 +104,14 @@ jobs:
           want=$(grep -o 'ENTITY md5 *"[^"]*"' "${plg[0]}" | grep -o '"[^"]*"' | tr -d '"')
           got=$(md5sum "${txz[0]}" | cut -d' ' -f1)
           [ "$got" = "$want" ] || { echo "::error::package md5 $got does not match the manifest's $want"; exit 1; }
+          # pluginURL outlives the test: servers keep checking it for updates. The pull request's build wrote this
+          # manifest, so it must match the base branch's own manifest, read through the API (never cached).
+          base=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .base.ref)
+          [[ "$base" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::unexpected base branch '$base'"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/contents/$PLG_PATH?ref=$base" --jq .content | base64 -d > /tmp/base.plg
+          want_url=$(xmllint --xpath 'string(/PLUGIN/@pluginURL)' /tmp/base.plg)
+          got_url=$(xmllint --xpath 'string(/PLUGIN/@pluginURL)' "${plg[0]}")
+          [ -n "$want_url" ] && [ "$got_url" = "$want_url" ] || { echo "::error::manifest pluginURL '$got_url' differs from the base branch's '$want_url'"; exit 1; }
           { echo "version=$version"; echo "tag=$tag"; echo "plg=${plg[0]}"; echo "txz=${txz[0]}"; echo "md5=$want"; } >> "$GITHUB_OUTPUT"
 
       - name: Publish the pre-release
@@ -123,13 +140,10 @@ jobs:
           gh release create --repo "$GITHUB_REPOSITORY" "$TAG" "$TXZ_FILE" "$PLG_FILE" --target "$DEFAULT_BRANCH" --prerelease \
             --title "Test build $VERSION (pull request #$PR, ${HEAD_SHA::7})" --notes-file "$notes"
           echo "install_url=$install_url" >> "$GITHUB_OUTPUT"
-          # older builds of this pull request go only after the new one exists
-          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
-            --jq ".[] | select(.prerelease and .tag_name != \"$TAG\" and (.tag_name | startswith(\"pr-$PR-\"))) | .tag_name" \
-            | while read -r old; do gh release delete --repo "$GITHUB_REPOSITORY" "$old" --cleanup-tag --yes; echo "removed $old"; done
 
       - name: Verify what a server will fetch
         if: steps.pr.outputs.number != ''
+        id: verify
         env:
           INSTALL_URL: ${{ steps.publish.outputs.install_url }}
           PLG_FILE: ${{ steps.meta.outputs.plg }}
@@ -150,16 +164,39 @@ jobs:
           [ "$got" = "$WANT" ] || { echo "::error::served package md5 $got does not match the manifest's $WANT"; exit 1; }
           echo "::notice::install URL: $INSTALL_URL"
 
-      - name: Update the pull request comment
+      - name: Remove the unverified build
+        if: failure() && steps.verify.outcome == 'failure'
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: gh release delete --repo "$GITHUB_REPOSITORY" "$TAG" --cleanup-tag --yes
+
+      - name: Remove older builds of this pull request
         if: steps.pr.outputs.number != ''
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq ".[] | select(.prerelease and .tag_name != \"$TAG\" and (.tag_name | startswith(\"pr-$PR-\"))) | .tag_name" \
+            | while read -r old; do gh release delete --repo "$GITHUB_REPOSITORY" "$old" --cleanup-tag --yes; echo "removed $old"; done
+
+      - name: Update the pull request comment
+        # also on failure: a workflow_run job is not a check on the pull request, so this is where a maintainer sees it
+        if: always() && steps.pr.outputs.number != ''
         env:
           PR: ${{ steps.pr.outputs.number }}
           VERSION: ${{ steps.meta.outputs.version }}
           INSTALL_URL: ${{ steps.publish.outputs.install_url }}
+          VERIFIED: ${{ steps.verify.outcome == 'success' }}
         run: |
           set -euo pipefail
           run_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
-          body=$(printf '%s\n' "$MARKER" "Test build \`$VERSION\` of ${HEAD_SHA::7} ([build log]($run_url)). Install from Plugins, Install Plugin, with this URL:" "" '```' "$INSTALL_URL" '```' "" "It installs over the current release and the next real release supersedes it. Add the \`$LABEL\` label again for a new build.")
+          if [ "$VERIFIED" = true ]; then
+            body=$(printf '%s\n' "$MARKER" "Test build \`$VERSION\` of ${HEAD_SHA::7} ([build log]($run_url)). Install from Plugins, Install Plugin, with this URL:" "" '```' "$INSTALL_URL" '```' "" "It installs over the current release and the next real release supersedes it. Add the \`$LABEL\` label again for a new build.")
+          else
+            body=$(printf '%s\n' "$MARKER" "The build of ${HEAD_SHA::7} was not published ([build log]($run_url), [publish log](https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Add the \`$LABEL\` label again to retry.")
+          fi
           id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments?per_page=100" \
             --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\"))) | .id" | head -n 1)
           if [ -n "$id" ]; then
@@ -169,7 +206,7 @@ jobs:
           fi
 
       - name: Take the label off so the next build needs a new go
-        if: steps.pr.outputs.number != ''
+        if: always() && steps.pr.outputs.number != ''
         env:
           PR: ${{ steps.pr.outputs.number }}
         run: gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels/$LABEL" -X DELETE >/dev/null

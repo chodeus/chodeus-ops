@@ -31,3 +31,4 @@ jobs:
       head_owner: ${{ github.event.workflow_run.head_repository.owner.login }}
       head_branch: ${{ github.event.workflow_run.head_branch }}
       head_sha: ${{ github.event.workflow_run.head_sha }}
+      plg_file: PLUGIN.plg      # <- your manifest
