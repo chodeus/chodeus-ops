@@ -185,6 +185,21 @@ jobs:
             --jq ".[] | select(.prerelease and .tag_name != \"$TAG\" and (.tag_name | startswith(\"pr-$PR-\"))) | .tag_name" \
             | while read -r old; do gh release delete --repo "$GITHUB_REPOSITORY" "$old" --cleanup-tag --yes; echo "removed $old"; done
 
+      - name: Undo the release if the pull request closed meanwhile
+        if: always() && steps.verify.outcome == 'success'
+        id: closed
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # PR cleanup runs on close and finds nothing when it races this job; finish the job the same way
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .state)" != "open" ]; then
+            gh release delete --repo "$GITHUB_REPOSITORY" "$TAG" --cleanup-tag --yes
+            echo "closed=true" >> "$GITHUB_OUTPUT"
+            echo "Pull request #$PR closed while publishing; the release was removed again."
+          fi
+
       - name: Update the pull request comment
         # also on failure: a workflow_run job is not a check on the pull request, so this is where a maintainer sees it
         if: always() && steps.pr.outputs.number != ''
@@ -193,10 +208,13 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
           INSTALL_URL: ${{ steps.publish.outputs.install_url }}
           VERIFIED: ${{ steps.verify.outcome == 'success' }}
+          CLOSED: ${{ steps.closed.outputs.closed == 'true' }}
         run: |
           set -euo pipefail
           run_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
-          if [ "$VERIFIED" = true ]; then
+          if [ "$CLOSED" = true ]; then
+            body=$(printf '%s\n' "$MARKER" "The test build for this pull request has been removed.")
+          elif [ "$VERIFIED" = true ]; then
             body=$(printf '%s\n' "$MARKER" "Test build \`$VERSION\` of ${HEAD_SHA::7} ([build log]($run_url)). Install from Plugins, Install Plugin, with this URL:" "" '```' "$INSTALL_URL" '```' "" "It installs over the current release and the next real release supersedes it. Add the \`$LABEL\` label again for a new build.")
           else
             body=$(printf '%s\n' "$MARKER" "The build of ${HEAD_SHA::7} was not published ([build log]($run_url), [publish log](https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Add the \`$LABEL\` label again to retry.")
@@ -214,16 +232,3 @@ jobs:
         env:
           PR: ${{ steps.pr.outputs.number }}
         run: gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels/$LABEL" -X DELETE >/dev/null
-
-      - name: Undo the release if the pull request closed meanwhile
-        if: steps.pr.outputs.number != ''
-        env:
-          PR: ${{ steps.pr.outputs.number }}
-          TAG: ${{ steps.meta.outputs.tag }}
-        run: |
-          set -euo pipefail
-          # PR cleanup runs on close and finds nothing when it races this job; finish the job the same way
-          if [ "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .state)" != "open" ]; then
-            gh release delete --repo "$GITHUB_REPOSITORY" "$TAG" --cleanup-tag --yes
-            echo "Pull request #$PR closed while publishing; the release was removed again."
-          fi
