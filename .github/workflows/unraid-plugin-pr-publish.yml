@@ -91,24 +91,28 @@ jobs:
           PR: ${{ steps.pr.outputs.number }}
         run: |
           set -euo pipefail
-          # build.env was written by the pull request's own build: trust nothing in it that the event already says
+          # everything in dist/ was written by the pull request's own build; the base branch's manifest is the reference
+          base=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .base.ref)
+          [[ "$base" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::unexpected base branch '$base'"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/contents/$PLG_PATH?ref=$base" --jq .content | base64 -d > /tmp/base.plg
+          entity() { grep -o "<!ENTITY $1 *\"[^\"]*\"" "$2" | grep -o '"[^"]*"' | tr -d '"'; }
+          release=$(entity version /tmp/base.plg)
           version=$(sed -n 's/^version=//p' dist/build.env | tr -d '[:space:]')
-          [[ "$version" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+$ ]] || { echo "::error::unexpected version '$version'"; exit 1; }
+          # the version must sort above the base branch's release and below the next one (see PR build)
+          [[ "$version" == "$release.0"* && "${version#"$release.0"}" =~ ^[0-9]{12}$ ]] \
+            || { echo "::error::version '$version' is not '$release.0<build time>'; if the base branch released since the build, add the label again"; exit 1; }
           [ "$(sed -n 's/^pr=//p' dist/build.env | tr -d '[:space:]')" = "$PR" ] || { echo "::error::the build says it belongs to another pull request"; exit 1; }
           [ "$(sed -n 's/^head_sha=//p' dist/build.env | tr -d '[:space:]')" = "$HEAD_SHA" ] || { echo "::error::the build is not from ${HEAD_SHA::7}"; exit 1; }
           mapfile -t plg < <(find dist -maxdepth 1 -name '*.plg' -type f)
           mapfile -t txz < <(find dist -maxdepth 1 -name '*.txz' -type f)
           [ "${#plg[@]}" -eq 1 ] && [ "${#txz[@]}" -eq 1 ] || { echo "::error::expected one .plg and one .txz in the build"; exit 1; }
+          [ "$(entity version "${plg[0]}")" = "$version" ] || { echo "::error::the manifest's version entity is not $version"; exit 1; }
           tag="pr-$PR-$version"
           grep -Fq "/releases/download/$tag/" "${plg[0]}" || { echo "::error::manifest does not download from /releases/download/$tag/"; exit 1; }
-          want=$(grep -o 'ENTITY md5 *"[^"]*"' "${plg[0]}" | grep -o '"[^"]*"' | tr -d '"')
+          want=$(entity md5 "${plg[0]}")
           got=$(md5sum "${txz[0]}" | cut -d' ' -f1)
           [ "$got" = "$want" ] || { echo "::error::package md5 $got does not match the manifest's $want"; exit 1; }
-          # pluginURL outlives the test: servers keep checking it for updates. The pull request's build wrote this
-          # manifest, so it must match the base branch's own manifest, read through the API (never cached).
-          base=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .base.ref)
-          [[ "$base" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::unexpected base branch '$base'"; exit 1; }
-          gh api "repos/$GITHUB_REPOSITORY/contents/$PLG_PATH?ref=$base" --jq .content | base64 -d > /tmp/base.plg
+          # pluginURL outlives the test: servers keep checking it for updates, so it must be the base branch's
           want_url=$(xmllint --xpath 'string(/PLUGIN/@pluginURL)' /tmp/base.plg)
           got_url=$(xmllint --xpath 'string(/PLUGIN/@pluginURL)' "${plg[0]}")
           [ -n "$want_url" ] && [ "$got_url" = "$want_url" ] || { echo "::error::manifest pluginURL '$got_url' differs from the base branch's '$want_url'"; exit 1; }

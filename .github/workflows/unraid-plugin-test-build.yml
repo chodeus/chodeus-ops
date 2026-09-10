@@ -14,15 +14,12 @@ on:
         description: 'Build command; receives --version <v> --branch <b> and must write dist/<pkg>.txz.'
         type: string
         default: 'bash pkg_build.sh'
-      tz:
-        type: string
-        default: Australia/Perth
       release_tag:
         description: 'Tag prefix for test pre-releases; each build gets <prefix>-<version> and older ones are removed.'
         type: string
         default: test
       version:
-        description: 'YYYY.MM.DD[.N]. Empty = yesterday + .9<UTC build time>, which beats the installed release and loses to the next one.'
+        description: 'Empty = the branch release + .0<UTC build time>, which installs over the current release and loses to the next one.'
         type: string
         default: ''
     outputs:
@@ -37,7 +34,6 @@ permissions:
 env:
   PLG: ${{ inputs.plg_file }}
   BUILD_CMD: ${{ inputs.build_cmd }}
-  TZ: ${{ inputs.tz }}
   TAG: ${{ inputs.release_tag }}
   VERSION_IN: ${{ inputs.version }}
 
@@ -67,14 +63,14 @@ jobs:
           if [ -n "$VERSION_IN" ]; then
             version="$VERSION_IN"
           else
-            # yesterday in the configured timezone (the calendar the releases use) keeps a same-day real
-            # release newer; the time of day orders same-day builds under strcmp (the concurrency group runs
-            # them one at a time) and gives a re-run its own tag
-            version="$(date -d yesterday +%Y.%m.%d.9%H%M%S)"
+            # Unraid orders versions with strcmp and refuses to install an older one: <release>.0<UTC build
+            # time> sorts above the branch's release and below whatever is released next, and orders builds
+            release=$(grep -o '<!ENTITY version *"[^"]*"' "$PLG" | grep -o '"[^"]*"' | tr -d '"')
+            version="$release.0$(date -u +%y%m%d%H%M%S)"
           fi
           # The manifest's pre-install script interpolates the version into a shell glob.
-          [[ "$version" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]] \
-            || { echo "::error::version must be YYYY.MM.DD or YYYY.MM.DD.N (got '$version')"; exit 1; }
+          [[ "$version" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}[0-9a-z.]*$ ]] \
+            || { echo "::error::version must start with YYYY.MM.DD and hold only digits, letters and dots (got '$version')"; exit 1; }
           [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::release_tag must be a plain tag name (got '$TAG')"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "version $version"
