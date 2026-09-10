@@ -30,13 +30,16 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::pr_number must be a number (got '$PR')"; exit 1; }
-          removed=0
-          while read -r tag; do
-            gh release delete --repo "$GITHUB_REPOSITORY" "$tag" --cleanup-tag --yes
-            echo "removed $tag"; removed=$((removed + 1))
-          done < <(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+          # listed first: a failing call inside a process substitution would read as "nothing to remove"
+          tags=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
             --jq ".[] | select(.prerelease and (.tag_name | startswith(\"pr-$PR-\"))) | .tag_name")
-          [ "$removed" -gt 0 ] || { echo "No test build for #$PR."; exit 0; }
+          [ -n "$tags" ] || echo "No test build for #$PR."
+          while read -r tag; do
+            [ -n "$tag" ] || continue
+            gh release delete --repo "$GITHUB_REPOSITORY" "$tag" --cleanup-tag --yes
+            echo "removed $tag"
+          done <<< "$tags"
+          # also when nothing was left: an earlier attempt may have removed the builds and failed before this
           id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments?per_page=100" \
             --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\"))) | .id" | head -n 1)
           if [ -n "$id" ]; then
