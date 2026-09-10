@@ -1,0 +1,44 @@
+name: Reusable — Unraid plugin PR cleanup
+
+# Removes every pr-<number>-* test build when a pull request closes and says so in the build comment.
+# Checks out nothing.
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: 'Pull request number (github.event.pull_request.number).'
+        required: true
+        type: number
+
+permissions:
+  contents: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  PR: ${{ inputs.pr_number }}
+  MARKER: '<!-- pr-build -->'
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Remove the pull request's test builds and update the note
+        run: |
+          set -euo pipefail
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::pr_number must be a number (got '$PR')"; exit 1; }
+          removed=0
+          while read -r tag; do
+            gh release delete --repo "$GITHUB_REPOSITORY" "$tag" --cleanup-tag --yes
+            echo "removed $tag"; removed=$((removed + 1))
+          done < <(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq ".[] | select(.prerelease and (.tag_name | startswith(\"pr-$PR-\"))) | .tag_name")
+          [ "$removed" -gt 0 ] || { echo "No test build for #$PR."; exit 0; }
+          id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments?per_page=100" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\"))) | .id" | head -n 1)
+          if [ -n "$id" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/issues/comments/$id" -X PATCH -f body="$MARKER"$'\n'"The test build for this pull request has been removed." >/dev/null
+          fi
