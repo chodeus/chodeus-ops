@@ -102,6 +102,7 @@ jobs:
           [[ "$version" == "$release.0"* && "${version#"$release.0"}" =~ ^[0-9]{12}$ ]] \
             || { echo "::error::version '$version' is not '$release.0<build time>'; if the base branch released since the build, add the label again"; exit 1; }
           [ "$(sed -n 's/^pr=//p' dist/build.env | tr -d '[:space:]')" = "$PR" ] || { echo "::error::the build says it belongs to another pull request"; exit 1; }
+          [ "$(sed -n 's/^base=//p' dist/build.env | tr -d '[:space:]')" = "$base" ] || { echo "::error::the build was made against another base branch than '$base'; add the label again"; exit 1; }
           [ "$(sed -n 's/^head_sha=//p' dist/build.env | tr -d '[:space:]')" = "$HEAD_SHA" ] || { echo "::error::the build is not from ${HEAD_SHA::7}"; exit 1; }
           mapfile -t plg < <(find dist -maxdepth 1 -name '*.plg' -type f)
           mapfile -t txz < <(find dist -maxdepth 1 -name '*.txz' -type f)
