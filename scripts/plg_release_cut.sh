@@ -40,9 +40,21 @@ mapfile -t txz < <(find dist -maxdepth 1 -name '*.txz' -type f)
 xmllint --noout "$PLG"
 $PLGR check --changelog "$CHANGELOG" --plg "$PLG" --channel "$CHANNEL" --branch "$BASE"
 
+# Stable releases name the release before them and how to go back to it. Installing a lower version
+# needs "forced"; removing the plugin first would delete its settings (both remove scripts rm -rf them).
+rollback_footer() {
+  local prev
+  prev=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // empty')
+  [ -n "$prev" ] || return 0
+  # the manifest as released, pinned to its tag; its package URL is that release's own asset
+  printf '%s\n' "" "Rollback to $prev if this release breaks something for you. In a terminal on the server, this goes back and keeps your settings:" '```' "plugin install https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$prev/$PLG forced" '```' "Removing the plugin first would delete its settings. If Auto Update Applications covers this plugin, switch it off for it until the fix is out, or it will update again."
+}
+
 notes=$(mktemp)
 plugin_url=$($PLGR entity --plg "$PLG" --name pluginURL)
-$PLGR notes --changelog "$CHANGELOG" --version "$version" --footer "Install / update URL: \`$plugin_url\`" > "$notes"
+footer="Install / update URL: \`$plugin_url\`"
+[ "$CHANNEL" != stable ] || footer+=$'\n'"$(rollback_footer)"
+$PLGR notes --changelog "$CHANGELOG" --version "$version" --footer "$footer" > "$notes"
 
 git add "$PLG" "$CHANGELOG"
 git commit -q -m "chore(release): v$version [skip ci]"
