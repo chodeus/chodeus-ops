@@ -36,7 +36,9 @@ jobs:
           [ -n "$tags" ] || echo "No test build for #$PR."
           while read -r tag; do
             [ -n "$tag" ] || continue
-            gh release delete --repo "$GITHUB_REPOSITORY" "$tag" --cleanup-tag --yes
+            # a publish run that saw the close may have removed it already: "release not found" is that outcome
+            out=$(gh release delete --repo "$GITHUB_REPOSITORY" "$tag" --cleanup-tag --yes 2>&1) \
+              || [[ "$out" == *"release not found"* ]] || { echo "$out" >&2; exit 1; }
             echo "removed $tag"
           done <<< "$tags"
           # also when nothing was left: an earlier attempt may have removed the builds and failed before this
