@@ -9,12 +9,8 @@ on:
       - '.github/actionlint.yaml'
       - 'templates/**.yml'
       - 'templates/**.yaml'
+  # No paths filter: actionlint is a required check, so a PR that skips it stays blocked.
   pull_request:
-    paths:
-      - '.github/workflows/**'
-      - '.github/actionlint.yaml'
-      - 'templates/**.yml'
-      - 'templates/**.yaml'
   workflow_dispatch:
 
 permissions:
