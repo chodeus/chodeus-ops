@@ -43,14 +43,16 @@ $PLGR check --changelog "$CHANGELOG" --plg "$PLG" --channel "$CHANNEL" --branch 
 # Stable releases name the release before them and how to go back to it. Installing a lower version
 # needs "forced"; removing the plugin first would delete its settings (both remove scripts rm -rf them).
 rollback_footer() {
-  local prev cmd
+  local prev cmd path
   # a failed lookup must stop the release, not ship it without this note: set -e does not reach into $( )
   prev=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // empty') \
     || { echo "could not list releases for the rollback note" >&2; return 1; }
   [ -n "$prev" ] || return 0
-  # the manifest as released, pinned to its tag (its package URL is that release's own asset); %q keeps the
-  # pasted command one argument whatever the tag holds, since git allows ; and $ in tag names
-  printf -v cmd 'plugin install %q forced' "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$prev/$PLG"
+  # the manifest as released, pinned to its tag (its package URL is that release's own asset); the tag and path are
+  # percent-encoded for the URL (git allows # ; $ in tag names) and %q keeps the pasted command one argument
+  path=$(python3 -c 'import sys, urllib.parse as u; print("/".join(u.quote(a, safe="/") for a in sys.argv[1:]))' "$prev" "$PLG") \
+    || return 1
+  printf -v cmd 'plugin install %q forced' "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$path"
   printf '%s\n' "" "Rollback to $prev if this release breaks something for you. In a terminal on the server, this goes back and keeps your settings:" '```' "$cmd" '```' "Removing the plugin first would delete its settings. If Auto Update Applications covers this plugin, switch it off for it until the fix is out, or it will update again."
 }
 

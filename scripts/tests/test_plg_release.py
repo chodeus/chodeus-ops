@@ -482,13 +482,17 @@ def test_rollback_note_pins_the_previous_release(tmp_path):
 
 
 def test_rollback_command_stays_one_command_whatever_the_tag(tmp_path):
-    """Git allows ; in tag names; the pasted command must still run nothing but plugin install."""
+    """Git allows ; # and spaces in tag names; the pasted command must stay one command with a working URL."""
+    from urllib.parse import unquote, urlsplit
     r = _rollback_footer(tmp_path, "echo 'v1;touch INJECTED;#'")
     cmd = next(line for line in r.stdout.splitlines() if line.startswith("plugin install"))
     subprocess.run(["bash", "-c", 'plugin() { printf "%s\\n" "$@" > args; }\n' + cmd], cwd=tmp_path, check=True)
     assert not (tmp_path / "INJECTED").exists()
-    assert (tmp_path / "args").read_text().splitlines() == [
-        "install", "https://raw.githubusercontent.com/chodeus/plugin/v1;touch INJECTED;#/plugin.plg", "forced"]
+    verb, url, forced = (tmp_path / "args").read_text().splitlines()
+    assert (verb, forced) == ("install", "forced")
+    parts = urlsplit(url)
+    assert parts.fragment == "" and parts.path.endswith("/plugin.plg"), url
+    assert unquote(parts.path) == "/chodeus/plugin/v1;touch INJECTED;#/plugin.plg"
 
 
 def test_no_rollback_note_before_the_first_stable_release(tmp_path):
