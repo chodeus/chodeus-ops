@@ -1,0 +1,49 @@
+name: Reusable — Unraid plugin PR cleanup
+
+# Removes every pr-<number>-* test build when a pull request closes and says so in the build comment.
+# Checks out nothing.
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: 'Pull request number (github.event.pull_request.number).'
+        required: true
+        type: number
+
+permissions:
+  contents: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  PR: ${{ inputs.pr_number }}
+  MARKER: '<!-- pr-build -->'
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Remove the pull request's test builds and update the note
+        run: |
+          set -euo pipefail
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::pr_number must be a number (got '$PR')"; exit 1; }
+          # listed first: a failing call inside a process substitution would read as "nothing to remove"
+          tags=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq ".[] | select(.prerelease and (.tag_name | startswith(\"pr-$PR-\"))) | .tag_name")
+          [ -n "$tags" ] || echo "No test build for #$PR."
+          while read -r tag; do
+            [ -n "$tag" ] || continue
+            # a publish run that saw the close may have removed it already: "release not found" is that outcome
+            out=$(gh release delete --repo "$GITHUB_REPOSITORY" "$tag" --cleanup-tag --yes 2>&1) \
+              || [[ "$out" == *"release not found"* ]] || { echo "$out" >&2; exit 1; }
+            echo "removed $tag"
+          done <<< "$tags"
+          # also when nothing was left: an earlier attempt may have removed the builds and failed before this
+          id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments?per_page=100" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\"))) | .id" | head -n 1)
+          if [ -n "$id" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/issues/comments/$id" -X PATCH -f body="$MARKER"$'\n'"The test build for this pull request has been removed." >/dev/null
+          fi
