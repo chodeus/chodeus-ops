@@ -16,6 +16,6 @@ jobs:
       contents: write
       pull-requests: write
     # Pin to a reviewed chodeus-ops commit.
-    uses: chodeus/chodeus-ops/.github/workflows/unraid-plugin-pr-cleanup.yml@main
+    uses: chodeus/chodeus-ops/.github/workflows/unraid-plugin-pr-cleanup.yml@3e8986e0bbed0a74436a2862ec2a1ed206d4a3de # main
     with:
       pr_number: ${{ github.event.pull_request.number }}
