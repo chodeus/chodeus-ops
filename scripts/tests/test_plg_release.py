@@ -456,3 +456,48 @@ def test_last_version_and_entity(fv3):
     assert run("entity", "--plg", plg, "--name", "pluginURL") == 0
     assert pr.plg_entities(plg.read_text())["pluginURL"] == "https://raw.githubusercontent.com/chodeus/folder.view3/beta/folder.view3.plg"
     assert run("entity", "--plg", plg, "--name", "nope") == 2
+
+
+def _rollback_footer(tmp_path, gh_body, call="rollback_footer"):
+    """Run rollback_footer from plg_release_cut.sh against a stub gh."""
+    body = (SCRIPTS / "plg_release_cut.sh").read_text()
+    fn = re.search(r"^rollback_footer\(\) \{.*?^\}", body, re.M | re.S).group(0)
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    gh = bindir / "gh"
+    gh.write_text("#!/bin/bash\n" + gh_body + "\n")
+    gh.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}",
+           "GITHUB_REPOSITORY": "chodeus/plugin", "PLG": "plugin.plg"}
+    return subprocess.run(["bash", "-c", f"set -euo pipefail\n{fn}\n{call}"], cwd=tmp_path, env=env,
+                          capture_output=True, text=True)
+
+
+def test_rollback_note_pins_the_previous_release(tmp_path):
+    """The rollback command installs the manifest as it was at the last stable tag."""
+    r = _rollback_footer(tmp_path, "echo v2026.09.06")
+    assert r.returncode == 0, r.stderr
+    assert ("plugin install https://raw.githubusercontent.com/chodeus/plugin/v2026.09.06/plugin.plg forced"
+            in r.stdout.splitlines())
+
+
+def test_rollback_command_stays_one_command_whatever_the_tag(tmp_path):
+    """Git allows ; in tag names; the pasted command must still run nothing but plugin install."""
+    r = _rollback_footer(tmp_path, "echo 'v1;touch INJECTED;#'")
+    cmd = next(line for line in r.stdout.splitlines() if line.startswith("plugin install"))
+    subprocess.run(["bash", "-c", 'plugin() { printf "%s\\n" "$@" > args; }\n' + cmd], cwd=tmp_path, check=True)
+    assert not (tmp_path / "INJECTED").exists()
+    assert (tmp_path / "args").read_text().splitlines() == [
+        "install", "https://raw.githubusercontent.com/chodeus/plugin/v1;touch INJECTED;#/plugin.plg", "forced"]
+
+
+def test_no_rollback_note_before_the_first_stable_release(tmp_path):
+    """Without a stable release there is nothing to go back to."""
+    r = _rollback_footer(tmp_path, "exit 0")
+    assert (r.returncode, r.stdout) == (0, "")
+
+
+def test_a_failed_release_lookup_stops_the_release(tmp_path):
+    """A failed lookup must stop the release instead of shipping notes without the rollback."""
+    r = _rollback_footer(tmp_path, "echo 'HTTP 502' >&2; exit 1", call='rollback=$(rollback_footer); echo reached')
+    assert r.returncode != 0 and "reached" not in r.stdout
