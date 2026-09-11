@@ -1,0 +1,257 @@
+name: Reusable — Unraid plugin PR publish
+
+# Runs on the repository's own code with a write token and never checks out pull request code: publishes the
+# "PR build" artifact as pr-<number>-<version>, verifies what a server fetches, updates one comment, drops the label.
+
+on:
+  workflow_call:
+    inputs:
+      run_id:
+        description: 'The PR build run to publish (github.event.workflow_run.id).'
+        required: true
+        type: number
+      head_owner:
+        description: 'Owner of the pull request head repository (github.event.workflow_run.head_repository.owner.login).'
+        required: true
+        type: string
+      head_branch:
+        description: 'Pull request head branch (github.event.workflow_run.head_branch).'
+        required: true
+        type: string
+      head_sha:
+        description: 'Commit the build was made from (github.event.workflow_run.head_sha).'
+        required: true
+        type: string
+      label:
+        description: 'Label a maintainer adds to ask for a build; removed after publishing.'
+        type: string
+        default: test-build
+      plg_file:
+        description: 'Path to the .plg manifest, relative to repo root; its pluginURL on the base branch is the trusted one.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  RUN_ID: ${{ inputs.run_id }}
+  HEAD: ${{ inputs.head_owner }}:${{ inputs.head_branch }}
+  HEAD_SHA: ${{ inputs.head_sha }}
+  LABEL: ${{ inputs.label }}
+  PLG_PATH: ${{ inputs.plg_file }}
+  MARKER: '<!-- pr-build -->'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+    steps:
+      - name: Find the labelled pull request this build belongs to
+        id: pr
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::run_id must be a number (got '$RUN_ID')"; exit 1; }
+          [[ "$LABEL" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::label must be a plain name (got '$LABEL')"; exit 1; }
+          # gh encodes the fields; a branch name may hold & # + and would split a hand-built query
+          number=$(gh api -X GET "repos/$GITHUB_REPOSITORY/pulls" -f state=open -f per_page=100 -f head="$HEAD" \
+            --jq "map(select(.head.sha == \"$HEAD_SHA\")) | .[0].number")
+          if [ -z "$number" ] || [ "$number" = "null" ]; then
+            echo "No open pull request at $HEAD ${HEAD_SHA::7}; nothing to publish."
+            exit 0
+          fi
+          # the label is the maintainer's go; checked here too because this is the privileged job
+          if ! gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '.labels[].name' | grep -qx -- "$LABEL"; then
+            echo "Pull request #$number does not carry the $LABEL label; nothing to publish."
+            exit 0
+          fi
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Download the build
+        if: steps.pr.outputs.number != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pr-build-${{ steps.pr.outputs.number }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: dist
+
+      - name: Install xmllint
+        if: steps.pr.outputs.number != ''
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-utils
+
+      - name: Check the build against the pull request
+        if: steps.pr.outputs.number != ''
+        id: meta
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          # everything in dist/ was written by the pull request's own build; the base branch's manifest is the reference
+          base=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .base.ref)
+          [[ "$base" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::unexpected base branch '$base'"; exit 1; }
+          [[ "$PLG_PATH" =~ ^[A-Za-z0-9._/-]+\.plg$ ]] || { echo "::error::plg_file must be a plain relative path to a .plg file (got '$PLG_PATH')"; exit 1; }
+          gh api -X GET "repos/$GITHUB_REPOSITORY/contents/$PLG_PATH" -f ref="$base" --jq .content | base64 -d > /tmp/base.plg
+          entity() { grep -o "<!ENTITY $1 *\"[^\"]*\"" "$2" | grep -o '"[^"]*"' | tr -d '"'; }
+          release=$(entity version /tmp/base.plg)
+          version=$(sed -n 's/^version=//p' dist/build.env | tr -d '[:space:]')
+          # the version must sort above the base branch's release and below the next one (see PR build)
+          [[ "$version" == "$release.0"* && "${version#"$release.0"}" =~ ^[0-9]{12}$ ]] \
+            || { echo "::error::version '$version' is not '$release.0<build time>'; if the base branch released since the build, add the label again"; exit 1; }
+          [ "$(sed -n 's/^pr=//p' dist/build.env | tr -d '[:space:]')" = "$PR" ] || { echo "::error::the build says it belongs to another pull request"; exit 1; }
+          [ "$(sed -n 's/^base=//p' dist/build.env | tr -d '[:space:]')" = "$base" ] || { echo "::error::the build was made against another base branch than '$base'; add the label again"; exit 1; }
+          [ "$(sed -n 's/^head_sha=//p' dist/build.env | tr -d '[:space:]')" = "$HEAD_SHA" ] || { echo "::error::the build is not from ${HEAD_SHA::7}"; exit 1; }
+          mapfile -t plg < <(find dist -maxdepth 1 -name '*.plg' -type f)
+          mapfile -t txz < <(find dist -maxdepth 1 -name '*.txz' -type f)
+          [ "${#plg[@]}" -eq 1 ] && [ "${#txz[@]}" -eq 1 ] || { echo "::error::expected one .plg and one .txz in the build"; exit 1; }
+          # the built manifest is read parsed, the way Unraid reads it, never as text: a comment can hold anything
+          xpath() { xmllint --xpath "$1" "${plg[0]}"; }
+          [ "$(xpath 'string(/PLUGIN/@version)')" = "$version" ] || { echo "::error::the manifest's version is not $version"; exit 1; }
+          tag="pr-$PR-$version"
+          md5=$(md5sum "${txz[0]}" | cut -d' ' -f1)
+          # its one download must be this release's package, with that package's digest
+          package_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$(basename "${txz[0]}")"
+          [ "$(xpath 'count(/PLUGIN/FILE/URL)')" = 1 ] && [ "$(xpath 'string(/PLUGIN/FILE/URL)')" = "$package_url" ] \
+            || { echo "::error::the manifest must have one download, $package_url"; exit 1; }
+          [ "$(xpath 'string(/PLUGIN/FILE[URL]/MD5)')" = "$md5" ] || { echo "::error::the manifest's package MD5 is not $md5"; exit 1; }
+          # pluginURL outlives the test: servers keep checking it for updates, so it must be the base branch's
+          want_url=$(xmllint --xpath 'string(/PLUGIN/@pluginURL)' /tmp/base.plg)
+          got_url=$(xpath 'string(/PLUGIN/@pluginURL)')
+          [ -n "$want_url" ] && [ "$got_url" = "$want_url" ] || { echo "::error::manifest pluginURL '$got_url' differs from the base branch's '$want_url'"; exit 1; }
+          { echo "version=$version"; echo "tag=$tag"; echo "plg=${plg[0]}"; echo "txz=${txz[0]}"; echo "md5=$md5"; } >> "$GITHUB_OUTPUT"
+
+      - name: Publish the pre-release
+        if: steps.pr.outputs.number != ''
+        id: publish
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          PLG_FILE: ${{ steps.meta.outputs.plg }}
+          TXZ_FILE: ${{ steps.meta.outputs.txz }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          install_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$(basename "$PLG_FILE")"
+          notes=$(mktemp)
+          {
+            echo "Test build of pull request #$PR at ${HEAD_SHA::7}. Not a release: the next build of this pull request replaces it, closing the pull request removes it, and the next real release supersedes it on installed servers."
+            echo
+            echo "Install: Plugins > Install Plugin > paste \`$install_url\`"
+          } > "$notes"
+          # a re-run of this build meets its own release, the same bytes and maybe already announced: keep it, verify it
+          if gh release view --repo "$GITHUB_REPOSITORY" "$TAG" >/dev/null 2>&1; then
+            echo "$TAG exists already (a re-run of this build); verifying it instead of publishing it again."
+          else
+            # a fork's head commit is not in this repository, so the tag sits on the default branch; the notes name the commit
+            gh release create --repo "$GITHUB_REPOSITORY" "$TAG" "$TXZ_FILE" "$PLG_FILE" --target "$DEFAULT_BRANCH" --prerelease \
+              --title "Test build $VERSION (pull request #$PR, ${HEAD_SHA::7})" --notes-file "$notes"
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "install_url=$install_url" >> "$GITHUB_OUTPUT"
+
+      - name: Verify what a server will fetch
+        if: steps.pr.outputs.number != ''
+        id: verify
+        env:
+          INSTALL_URL: ${{ steps.publish.outputs.install_url }}
+          PLG_FILE: ${{ steps.meta.outputs.plg }}
+          TXZ_FILE: ${{ steps.meta.outputs.txz }}
+          WANT: ${{ steps.meta.outputs.md5 }}
+        run: |
+          set -euo pipefail
+          txz_url="${INSTALL_URL%/*}/$(basename "$TXZ_FILE")"
+          # Assets take a few seconds to serve after a release is created.
+          for attempt in 1 2 3 4 5 6; do
+            if curl --connect-timeout 15 --max-time 120 -fsSL -o /tmp/got.plg "$INSTALL_URL" \
+               && curl --connect-timeout 15 --max-time 120 -fsSL -o /tmp/got.txz "$txz_url"; then break; fi
+            [ "$attempt" -lt 6 ] || { echo "::error::assets not downloadable after $attempt attempts"; exit 1; }
+            sleep 10
+          done
+          cmp -s /tmp/got.plg "$PLG_FILE" || { echo "::error::served manifest differs from the built one"; exit 1; }
+          got=$(md5sum /tmp/got.txz | cut -d' ' -f1)
+          [ "$got" = "$WANT" ] || { echo "::error::served package md5 $got does not match the manifest's $WANT"; exit 1; }
+          echo "::notice::install URL: $INSTALL_URL"
+
+      - name: Remove the unverified build
+        if: failure() && steps.verify.outcome == 'failure' && steps.publish.outputs.created == 'true'
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          # PR cleanup may have removed it already: "release not found" is that outcome, anything else is not
+          out=$(gh release delete --repo "$GITHUB_REPOSITORY" "$TAG" --cleanup-tag --yes 2>&1) \
+            || [[ "$out" == *"release not found"* ]] || { echo "$out" >&2; exit 1; }
+
+      - name: Remove older builds of this pull request
+        if: steps.pr.outputs.number != ''
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq ".[] | select(.prerelease and .tag_name != \"$TAG\" and (.tag_name | startswith(\"pr-$PR-\"))) | .tag_name" \
+            | while read -r old; do
+                out=$(gh release delete --repo "$GITHUB_REPOSITORY" "$old" --cleanup-tag --yes 2>&1) \
+                  || [[ "$out" == *"release not found"* ]] || { echo "$out" >&2; exit 1; }
+                echo "removed $old"
+              done
+
+      - name: Undo the release if the pull request closed meanwhile
+        if: always() && steps.verify.outcome == 'success'
+        id: closed
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # PR cleanup also runs on close; whichever gets there first removes the build, so "release not found"
+          # here means cleanup did, and the build is gone either way
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .state)" != "open" ]; then
+            out=$(gh release delete --repo "$GITHUB_REPOSITORY" "$TAG" --cleanup-tag --yes 2>&1) \
+              || [[ "$out" == *"release not found"* ]] || { echo "$out" >&2; exit 1; }
+            echo "closed=true" >> "$GITHUB_OUTPUT"
+            echo "Pull request #$PR closed while publishing; the release was removed again."
+          fi
+
+      - name: Update the pull request comment
+        # also on failure: a workflow_run job is not a check on the pull request, so this is where a maintainer sees it
+        if: always() && steps.pr.outputs.number != ''
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          INSTALL_URL: ${{ steps.publish.outputs.install_url }}
+          VERIFIED: ${{ steps.verify.outcome == 'success' }}
+          CLOSED: ${{ steps.closed.outputs.closed == 'true' }}
+        run: |
+          set -euo pipefail
+          run_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
+          if [ "$CLOSED" = true ]; then
+            body=$(printf '%s\n' "$MARKER" "The test build for this pull request has been removed.")
+          elif [ "$VERIFIED" = true ]; then
+            body=$(printf '%s\n' "$MARKER" "Test build \`$VERSION\` of ${HEAD_SHA::7} ([build log]($run_url)). Install from Plugins, Install Plugin, with this URL:" "" '```' "$INSTALL_URL" '```' "" "It installs over the current release and the next real release supersedes it. Add the \`$LABEL\` label again for a new build.")
+          else
+            body=$(printf '%s\n' "$MARKER" "The build of ${HEAD_SHA::7} was not published ([build log]($run_url), [publish log](https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). Add the \`$LABEL\` label again to retry.")
+          fi
+          id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments?per_page=100" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\"))) | .id" | head -n 1)
+          if [ -n "$id" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/issues/comments/$id" -X PATCH -f body="$body" >/dev/null
+          else
+            gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -X POST -f body="$body" >/dev/null
+          fi
+
+      - name: Take the label off so the next build needs a new go
+        if: always() && steps.pr.outputs.number != ''
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          # someone may have taken it off meanwhile: that 404 is the outcome wanted, any other error is not
+          if ! err=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels/$LABEL" -X DELETE 2>&1 >/dev/null); then
+            [[ "$err" == *"(HTTP 404)"* ]] || { echo "$err" >&2; exit 1; }
+            echo "The $LABEL label was already off."
+          fi
