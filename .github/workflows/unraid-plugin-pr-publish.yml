@@ -1,8 +1,7 @@
 name: Reusable — Unraid plugin PR publish
 
-# Runs on the repository's own code with a write token: takes the "PR build" artifact of a workflow_run,
-# publishes it as the pr-<number>-<version> pre-release, verifies what a server will fetch, keeps one comment
-# on the pull request current and takes the label off again. Never checks out or runs pull request code.
+# Runs on the repository's own code with a write token and never checks out pull request code: publishes the
+# "PR build" artifact as pr-<number>-<version>, verifies what a server fetches, updates one comment, drops the label.
 
 on:
   workflow_call:
@@ -95,7 +94,8 @@ jobs:
           # everything in dist/ was written by the pull request's own build; the base branch's manifest is the reference
           base=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .base.ref)
           [[ "$base" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::unexpected base branch '$base'"; exit 1; }
-          gh api "repos/$GITHUB_REPOSITORY/contents/$PLG_PATH?ref=$base" --jq .content | base64 -d > /tmp/base.plg
+          [[ "$PLG_PATH" =~ ^[A-Za-z0-9._/-]+\.plg$ ]] || { echo "::error::plg_file must be a plain relative path to a .plg file (got '$PLG_PATH')"; exit 1; }
+          gh api -X GET "repos/$GITHUB_REPOSITORY/contents/$PLG_PATH" -f ref="$base" --jq .content | base64 -d > /tmp/base.plg
           entity() { grep -o "<!ENTITY $1 *\"[^\"]*\"" "$2" | grep -o '"[^"]*"' | tr -d '"'; }
           release=$(entity version /tmp/base.plg)
           version=$(sed -n 's/^version=//p' dist/build.env | tr -d '[:space:]')

@@ -1,6 +1,5 @@
-# Caller for one test build of a pull request per press of the test-build label: replace PLUGIN.plg below.
-# Needs "PR publish" and "PR cleanup" next to it and a repo label named test-build.
-# Mechanics: .github/workflows/unraid-plugin-pr-build.yml.
+# Caller for one test build of a pull request per press of the test-build label; replace PLUGIN.plg below. Needs
+# "PR publish", "PR cleanup" and a repo label named test-build. Mechanics: .github/workflows/unraid-plugin-pr-build.yml.
 
 name: PR build
 

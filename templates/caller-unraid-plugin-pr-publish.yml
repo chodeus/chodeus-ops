@@ -1,6 +1,5 @@
-# Caller that turns a finished "PR build" into a pr-<number>-<version> pre-release, comments the install
-# URL on the pull request and takes the test-build label off. Runs this repo's default-branch code only.
-# Mechanics: .github/workflows/unraid-plugin-pr-publish.yml.
+# Caller that turns a finished "PR build" into a pr-<number>-<version> pre-release, comments the install URL and
+# takes the test-build label off; runs default-branch code only. Mechanics: .github/workflows/unraid-plugin-pr-publish.yml.
 
 name: PR publish
 
