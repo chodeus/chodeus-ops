@@ -284,7 +284,8 @@ def next_version(repo: Path, channel: str, date: str) -> str:
         m = re.fullmatch(rf"v{re.escape(date)}(?:\.(\d+))?", t)
         if m:
             suffixes.append(int(m.group(1) or 0))
-    if channel == "stable" and f"v{date}" not in tags and max(suffixes) == 0:
+    # A same-day beta never pushes the stable to .N (Unraid's strcmp then sorts <date> below <date>.1: beta boxes need "forced")
+    if channel == "stable" and f"v{date}" not in tags:
         return date
     return f"{date}.{max(suffixes) + 1}"
 
@@ -319,6 +320,9 @@ def cmd_seed(a) -> int:
     if a.carry_from and a.carry_from.exists():
         old = load_changelog(a.carry_from).unreleased()
         if old:
+            # release/<channel> outlives its cut: never carry a bullet a released section already has
+            shipped = {b for s in log.sections if s.released for b in s.bullets()}
+            old.body = [line for line in old.body if line not in shipped]
             log.sections = [s for s in log.sections if s.released]
             log.sections.insert(0, old)
     section = log.unreleased()
