@@ -416,17 +416,37 @@ def test_seed_from_beta_sections_stops_at_last_stable(tmp_path):
     assert pr.load_changelog(changelog).unreleased().bullets() == ["- Older beta", "- Shared", "- Newer beta"]
 
 
-def test_next_version_shares_counter_across_channels(repo):
+def test_next_version_stable_is_the_bare_date_unless_taken(repo):
+    """A same-day beta must not push the stable to .N; only a second stable that day takes the shared counter."""
     sh = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)  # noqa: E731
     assert pr.next_version(repo, "stable", "2026.09.05") == "2026.09.05"
     assert pr.next_version(repo, "beta", "2026.09.05") == "2026.09.05.1"
     sh("tag", "v2026.09.05.1")
     assert pr.next_version(repo, "beta", "2026.09.05") == "2026.09.05.2"
-    assert pr.next_version(repo, "stable", "2026.09.05") == "2026.09.05.2"
+    assert pr.next_version(repo, "stable", "2026.09.05") == "2026.09.05"
     sh("tag", "v2026.09.05.2")
     sh("tag", "v2026.09.05")
     assert pr.next_version(repo, "stable", "2026.09.05") == "2026.09.05.3"
+    assert pr.next_version(repo, "beta", "2026.09.05") == "2026.09.05.3"
     assert pr.next_version(repo, "stable", "2026.09.04") == "2026.09.04.1"
+
+
+def test_seed_does_not_carry_bullets_that_already_shipped(repo):
+    """release/<channel> outlives its cut, so its Unreleased may hold bullets a released section now carries."""
+    changelog = repo / "CHANGELOG.md"
+    changelog.write_text("# Changelog\n\n## 2026.09.05\n\n- Shipped in the cut\n\n## 2026.09.04\n\n- Old\n")
+    old = repo / "old.md"
+    old.write_text("# Changelog\n\n## Unreleased\n\n- Shipped in the cut\n- Still pending\n\n## 2026.09.04\n\n- Old\n")
+    run("seed", "--changelog", changelog, "--carry-from", old, "--since", "HEAD", "--repo", repo)
+    assert pr.load_changelog(changelog).unreleased().bullets() == ["- Still pending"]
+
+
+def test_cut_retires_the_release_branch_only_after_the_base_push():
+    """A surviving release/<channel> would carry its released bullets into the next release PR."""
+    body = (SCRIPTS / "plg_release_cut.sh").read_text()
+    push, disarm, delete = (body.index(t) for t in
+                            ('git push -q origin "HEAD:$BASE"', "trap - ERR", 'git push -q origin --delete "release/$CHANNEL"'))
+    assert push < disarm < delete, "the branch goes only once the release is fully published"
 
 
 def test_merge_changelog_inserts_missing_sections_and_keeps_our_order(tmp_path):
