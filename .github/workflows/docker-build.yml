@@ -77,6 +77,17 @@ jobs:
       list: ${{ steps.split.outputs.list }}
       cache_from: ${{ steps.split.outputs.cache_from }}
     steps:
+      # Two invocations differing only in `target` resolve the same image name and
+      # the same tags, so a later push replaces the earlier target. This warns
+      # rather than fails: one target legitimately takes the unsuffixed tags, and
+      # a single invocation cannot see whether its siblings are distinguished.
+      - name: Warn on an undistinguished target
+        if: ${{ inputs.target != '' && inputs.image_name == '' && inputs.tag_suffix == '' }}
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          echo "::warning::target '$TARGET' publishes to the default references. Any sibling target without image_name or tag_suffix overwrites it."
+
       - name: Split platforms
         id: split
         env:
@@ -116,17 +127,6 @@ jobs:
       TRIVY_PLATFORM: ${{ matrix.platform }}
       CACHE_SCOPE: ${{ inputs.target || 'final' }}-${{ matrix.slug }}
     steps:
-      # Two invocations differing only in `target` resolve the same image name and
-      # the same tags, so a later push replaces the earlier target. This warns
-      # rather than fails: one target legitimately takes the unsuffixed tags, and
-      # a single invocation cannot see whether its siblings are distinguished.
-      - name: Warn on an undistinguished target
-        if: ${{ inputs.target != '' && inputs.image_name == '' && inputs.tag_suffix == '' }}
-        env:
-          TARGET: ${{ inputs.target }}
-        run: |
-          echo "::warning::target '$TARGET' publishes to the default references. Any sibling target without image_name or tag_suffix overwrites it."
-
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
