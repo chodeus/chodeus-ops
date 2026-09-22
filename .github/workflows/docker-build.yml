@@ -44,7 +44,12 @@ on:
         type: boolean
         default: true
       target:
-        description: 'Dockerfile stage to build. Empty builds the final stage. Callers with a multi-stage image (e.g. lean + full) invoke this workflow once per target.'
+        description: 'Dockerfile stage to build. Empty builds the final stage. Callers with a multi-stage image (e.g. lean + full) invoke this workflow once per target, and must give each one distinct references via image_name or tag_suffix.'
+        required: false
+        type: string
+        default: ''
+      tag_suffix:
+        description: 'Appended to every computed tag, including latest. The way a multi-target caller keeps one image name while separating its targets, e.g. -full.'
         required: false
         type: string
         default: ''
@@ -73,6 +78,17 @@ jobs:
       security-events: write
     runs-on: ubuntu-latest
     steps:
+      # Two invocations differing only in `target` resolve the same image name and
+      # the same tags, so a later push replaces the earlier target. This warns
+      # rather than fails: one target legitimately takes the unsuffixed tags, and
+      # a single invocation cannot see whether its siblings are distinguished.
+      - name: Warn on an undistinguished target
+        if: ${{ inputs.target != '' && inputs.image_name == '' && inputs.tag_suffix == '' }}
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          echo "::warning::target '$TARGET' publishes to the default references. Any sibling target without image_name or tag_suffix overwrites it."
+
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
@@ -209,6 +225,8 @@ jobs:
         uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
         with:
           images: ${{ steps.name.outputs.image }}
+          # Empty suffix yields an empty flavor, which is the action's default.
+          flavor: ${{ inputs.tag_suffix != '' && format('suffix={0},onlatest=true', inputs.tag_suffix) || '' }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
