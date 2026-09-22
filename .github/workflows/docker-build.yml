@@ -68,15 +68,53 @@ on:
         required: false
 
 jobs:
-  # Build the image locally (single platform, no push) and scan it, so findings
-  # land BEFORE anything reaches GHCR. The multi-arch push only runs if this job
-  # succeeds. Severities split across two steps — see the comment above them.
+  # Turns the comma-separated platforms input into the scan matrix. The slug is
+  # the platform with '/' replaced, for cache scopes and SARIF categories.
+  platforms:
+    permissions: {}
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.split.outputs.list }}
+      cache_from: ${{ steps.split.outputs.cache_from }}
+    steps:
+      - name: Split platforms
+        id: split
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          list=$(jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))
+            | map({platform: ., slug: gsub("/"; "-")})' <<< "$PLATFORMS")
+          if [ "$(jq length <<< "$list")" -eq 0 ]; then
+            echo "::error::platforms is empty, so nothing would be scanned."
+            exit 1
+          fi
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+          {
+            echo 'cache_from<<EOF'
+            jq -r --arg t "${TARGET:-final}" '.[] | "type=gha,scope=\($t)-\(.slug)"' <<< "$list"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+  # Build and scan every published platform locally, with no push, so findings
+  # land BEFORE anything reaches GHCR. The push only runs if every leg passes.
   scan:
+    needs: platforms
     # contents: checkout. security-events: the Trivy SARIF upload.
     permissions:
       contents: read
       security-events: write
     runs-on: ubuntu-latest
+    strategy:
+      # One arch failing must not hide the other's report.
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.platforms.outputs.list) }}
+    env:
+      # Trivy assumes linux/amd64 unless told, and aborts on an image without it.
+      TRIVY_PLATFORM: ${{ matrix.platform }}
+      CACHE_SCOPE: ${{ inputs.target || 'final' }}-${{ matrix.slug }}
     steps:
       # Two invocations differing only in `target` resolve the same image name and
       # the same tags, so a later push replaces the earlier target. This warns
@@ -103,17 +141,16 @@ jobs:
         with:
           context: ${{ inputs.build_context }}
           file: ${{ inputs.dockerfile_path }}
-          # Single platform only: buildx can `load` into the local daemon for
-          # scanning; a multi-arch manifest cannot be loaded. The remaining
-          # platforms are built by the validation step at the end of this job.
-          platforms: linux/amd64
+          # One platform per leg: a multi-arch manifest cannot be loaded.
+          platforms: ${{ matrix.platform }}
           load: true
           push: false
           tags: chodeus-scan:${{ github.sha }}
           target: ${{ inputs.target }}
           build-args: ${{ inputs.build_args }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Per-platform scope: legs sharing one scope overwrite each other's cache.
+          cache-from: type=gha,scope=${{ env.CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }}
 
       # Two tiers on purpose. The report tier is the wide net and never blocks;
       # the gate tier is narrow and blocks. Both honour trivy_ignore_unfixed, so
@@ -140,7 +177,7 @@ jobs:
           TRIVY_IGNORE_UNFIXED: ${{ inputs.trivy_ignore_unfixed }}
         run: |
           {
-            echo "### Image scan — ${TRIVY_REPORT_SEVERITY} (fixable only: ${TRIVY_IGNORE_UNFIXED})"
+            echo "### Image scan — ${TRIVY_PLATFORM} — ${TRIVY_REPORT_SEVERITY} (fixable only: ${TRIVY_IGNORE_UNFIXED})"
             echo '```'
             cat trivy-report.txt 2>/dev/null || echo "(no report produced)"
             echo '```'
@@ -166,25 +203,11 @@ jobs:
         uses: github/codeql-action/upload-sarif@4e828ff8d448a8a6e532957b1811f387a63867e8 # v3.29.4
         with:
           sarif_file: trivy-image.sarif
-          category: trivy-image
-
-      # Every platform gets built here, not in the push job, so a no-push run
-      # never needs a job holding packages: write. Runs after the gate so a
-      # vulnerable image fails before the slow emulated arches are built.
-      - name: Validate all platforms build
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
-        with:
-          context: ${{ inputs.build_context }}
-          file: ${{ inputs.dockerfile_path }}
-          platforms: ${{ inputs.platforms }}
-          push: false
-          target: ${{ inputs.target }}
-          build-args: ${{ inputs.build_args }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Per platform: a shared category lets one leg's upload replace the other's.
+          category: trivy-image-${{ matrix.slug }}
 
   build:
-    needs: scan
+    needs: [platforms, scan]
     # Only exists when actually publishing, so a verification run never holds a
     # token with packages: write. Every platform is already built in scan.
     if: ${{ inputs.push }}
@@ -255,5 +278,5 @@ jobs:
           build-args: ${{ inputs.build_args }}
           provenance: true
           sbom: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # The scan legs wrote one scope per platform; this build only reads them.
+          cache-from: ${{ needs.platforms.outputs.cache_from }}
