@@ -29,10 +29,25 @@ on:
         type: boolean
         default: true
       trivy_severity:
-        description: 'Trivy severities that fail the build.'
+        description: 'Trivy severities that FAIL the build. Pair with trivy_ignore_unfixed.'
         required: false
         type: string
         default: 'CRITICAL,HIGH'
+      trivy_report_severity:
+        description: 'Trivy severities REPORTED to the job summary without failing. Visibility tier.'
+        required: false
+        type: string
+        default: 'CRITICAL,HIGH'
+      trivy_ignore_unfixed:
+        description: 'Only count vulnerabilities that have a fix available. A base image routinely carries unfixable CVEs, so false here makes the gate go red for something no caller can act on.'
+        required: false
+        type: boolean
+        default: true
+      target:
+        description: 'Dockerfile stage to build. Empty builds the final stage. Callers with a multi-stage image (e.g. lean + full) invoke this workflow once per target.'
+        required: false
+        type: string
+        default: ''
       build_args:
         description: 'Newline-separated KEY=VALUE build args.'
         required: false
@@ -53,9 +68,9 @@ permissions:
   security-events: write
 
 jobs:
-  # Build the image locally (single platform, no push) and scan it. Trivy runs
-  # in image mode with exit-code 1, so CRITICAL/HIGH findings fail here BEFORE
-  # anything reaches GHCR. The multi-arch push only runs if this job succeeds.
+  # Build the image locally (single platform, no push) and scan it, so findings
+  # land BEFORE anything reaches GHCR. The multi-arch push only runs if this job
+  # succeeds. Severities split across two steps — see the comment above them.
   scan:
     runs-on: ubuntu-latest
     steps:
@@ -80,19 +95,47 @@ jobs:
           load: true
           push: false
           tags: chodeus-scan:${{ github.sha }}
+          target: ${{ inputs.target }}
           build-args: ${{ inputs.build_args }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Trivy scan (image)
+      # Two tiers on purpose. The report tier is the wide net and never blocks;
+      # the gate tier is narrow and blocks. Both honour trivy_ignore_unfixed, so
+      # a base image carrying an unfixable CVE cannot wedge every caller's build.
+      - name: Trivy scan (report, non-blocking)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          scan-type: image
+          image-ref: chodeus-scan:${{ github.sha }}
+          severity: ${{ inputs.trivy_report_severity }}
+          ignore-unfixed: ${{ inputs.trivy_ignore_unfixed }}
+          exit-code: '0'
+          format: table
+          output: trivy-report.txt
+
+      - name: Publish scan report
+        if: always()
+        run: |
+          {
+            echo "### Image scan — ${{ inputs.trivy_report_severity }} (fixable only: ${{ inputs.trivy_ignore_unfixed }})"
+            echo '```'
+            cat trivy-report.txt 2>/dev/null || echo "(no report produced)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Trivy scan (gate)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
           scan-type: image
           image-ref: chodeus-scan:${{ github.sha }}
           severity: ${{ inputs.trivy_severity }}
+          ignore-unfixed: ${{ inputs.trivy_ignore_unfixed }}
           exit-code: '1'
           format: sarif
           output: trivy-image.sarif
+          # The report step above already installed trivy in this job.
+          skip-setup-trivy: true
 
       - name: Upload Trivy SARIF
         if: always()
@@ -157,6 +200,7 @@ jobs:
           push: ${{ inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          target: ${{ inputs.target }}
           build-args: ${{ inputs.build_args }}
           provenance: true
           sbom: true
