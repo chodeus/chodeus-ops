@@ -29,10 +29,30 @@ on:
         type: boolean
         default: true
       trivy_severity:
-        description: 'Trivy severities that fail the build.'
+        description: 'Trivy severities that FAIL the build. Pair with trivy_ignore_unfixed.'
         required: false
         type: string
         default: 'CRITICAL,HIGH'
+      trivy_report_severity:
+        description: 'Trivy severities REPORTED to the job summary without failing. Visibility tier.'
+        required: false
+        type: string
+        default: 'CRITICAL,HIGH'
+      trivy_ignore_unfixed:
+        description: 'Only count vulnerabilities that have a fix available. A base image routinely carries unfixable CVEs, so false here makes the gate go red for something no caller can act on.'
+        required: false
+        type: boolean
+        default: true
+      target:
+        description: 'Dockerfile stage to build. Empty builds the final stage. Callers with a multi-stage image (e.g. lean + full) invoke this workflow once per target, and must give each one distinct references via image_name or tag_suffix.'
+        required: false
+        type: string
+        default: ''
+      tag_suffix:
+        description: 'Appended to every computed tag, including latest. The way a multi-target caller keeps one image name while separating its targets, e.g. -full.'
+        required: false
+        type: string
+        default: ''
       build_args:
         description: 'Newline-separated KEY=VALUE build args.'
         required: false
@@ -47,18 +67,28 @@ on:
       DISCORD_WEBHOOK_URL:
         required: false
 
-permissions:
-  contents: read
-  packages: write
-  security-events: write
-
 jobs:
-  # Build the image locally (single platform, no push) and scan it. Trivy runs
-  # in image mode with exit-code 1, so CRITICAL/HIGH findings fail here BEFORE
-  # anything reaches GHCR. The multi-arch push only runs if this job succeeds.
+  # Build the image locally (single platform, no push) and scan it, so findings
+  # land BEFORE anything reaches GHCR. The multi-arch push only runs if this job
+  # succeeds. Severities split across two steps — see the comment above them.
   scan:
+    # contents: checkout. security-events: the Trivy SARIF upload.
+    permissions:
+      contents: read
+      security-events: write
     runs-on: ubuntu-latest
     steps:
+      # Two invocations differing only in `target` resolve the same image name and
+      # the same tags, so a later push replaces the earlier target. This warns
+      # rather than fails: one target legitimately takes the unsuffixed tags, and
+      # a single invocation cannot see whether its siblings are distinguished.
+      - name: Warn on an undistinguished target
+        if: ${{ inputs.target != '' && inputs.image_name == '' && inputs.tag_suffix == '' }}
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          echo "::warning::target '$TARGET' publishes to the default references. Any sibling target without image_name or tag_suffix overwrites it."
+
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
@@ -74,25 +104,58 @@ jobs:
           context: ${{ inputs.build_context }}
           file: ${{ inputs.dockerfile_path }}
           # Single platform only: buildx can `load` into the local daemon for
-          # scanning; a multi-arch manifest cannot be loaded. The push job below
-          # rebuilds all platforms (amd64 layers come from the gha cache).
+          # scanning; a multi-arch manifest cannot be loaded. The remaining
+          # platforms are built by the validation step at the end of this job.
           platforms: linux/amd64
           load: true
           push: false
           tags: chodeus-scan:${{ github.sha }}
+          target: ${{ inputs.target }}
           build-args: ${{ inputs.build_args }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Trivy scan (image)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+      # Two tiers on purpose. The report tier is the wide net and never blocks;
+      # the gate tier is narrow and blocks. Both honour trivy_ignore_unfixed, so
+      # a base image carrying an unfixable CVE cannot wedge every caller's build.
+      - name: Trivy scan (report, non-blocking)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: chodeus-scan:${{ github.sha }}
+          severity: ${{ inputs.trivy_report_severity }}
+          ignore-unfixed: ${{ inputs.trivy_ignore_unfixed }}
+          exit-code: '0'
+          format: table
+          output: trivy-report.txt
+
+      - name: Publish scan report
+        if: always()
+        # Via env, not `${{ }}` inline: an expression is expanded before bash
+        # parses the line, so a caller-supplied severity could inject a command.
+        env:
+          TRIVY_REPORT_SEVERITY: ${{ inputs.trivy_report_severity }}
+          TRIVY_IGNORE_UNFIXED: ${{ inputs.trivy_ignore_unfixed }}
+        run: |
+          {
+            echo "### Image scan — ${TRIVY_REPORT_SEVERITY} (fixable only: ${TRIVY_IGNORE_UNFIXED})"
+            echo '```'
+            cat trivy-report.txt 2>/dev/null || echo "(no report produced)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Trivy scan (gate)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
           image-ref: chodeus-scan:${{ github.sha }}
           severity: ${{ inputs.trivy_severity }}
+          ignore-unfixed: ${{ inputs.trivy_ignore_unfixed }}
           exit-code: '1'
           format: sarif
           output: trivy-image.sarif
+          # The report step above already installed trivy in this job.
+          skip-setup-trivy: true
 
       - name: Upload Trivy SARIF
         if: always()
@@ -101,8 +164,30 @@ jobs:
           sarif_file: trivy-image.sarif
           category: trivy-image
 
+      # Every platform gets built here, not in the push job, so a no-push run
+      # never needs a job holding packages: write. Runs after the gate so a
+      # vulnerable image fails before the slow emulated arches are built.
+      - name: Validate all platforms build
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile_path }}
+          platforms: ${{ inputs.platforms }}
+          push: false
+          target: ${{ inputs.target }}
+          build-args: ${{ inputs.build_args }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   build:
     needs: scan
+    # Only exists when actually publishing, so a verification run never holds a
+    # token with packages: write. Every platform is already built in scan.
+    if: ${{ inputs.push }}
+    # contents: checkout. packages: the GHCR login and push.
+    permissions:
+      contents: read
+      packages: write
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.build.outputs.digest }}
@@ -113,8 +198,12 @@ jobs:
 
       - name: Resolve image name
         id: name
+        # Same reason as the scan job's report step: quoting does not help,
+        # because the expression is substituted into the script before bash runs.
+        env:
+          IMAGE_NAME_INPUT: ${{ inputs.image_name }}
         run: |
-          NAME="${{ inputs.image_name }}"
+          NAME="$IMAGE_NAME_INPUT"
           if [ -z "$NAME" ]; then NAME="${GITHUB_REPOSITORY##*/}"; fi
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${NAME,,}" >> "$GITHUB_OUTPUT"
 
@@ -125,7 +214,6 @@ jobs:
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
 
       - name: Login to GHCR
-        if: ${{ inputs.push }}
         uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
         with:
           registry: ghcr.io
@@ -137,6 +225,8 @@ jobs:
         uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
         with:
           images: ${{ steps.name.outputs.image }}
+          # Empty suffix yields an empty flavor, which is the action's default.
+          flavor: ${{ inputs.tag_suffix != '' && format('suffix={0},onlatest=true', inputs.tag_suffix) || '' }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -157,6 +247,7 @@ jobs:
           push: ${{ inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          target: ${{ inputs.target }}
           build-args: ${{ inputs.build_args }}
           provenance: true
           sbom: true
