@@ -62,16 +62,14 @@ on:
       DISCORD_WEBHOOK_URL:
         required: false
 
-permissions:
-  contents: read
-  packages: write
-  security-events: write
-
 jobs:
   # Build the image locally (single platform, no push) and scan it, so findings
   # land BEFORE anything reaches GHCR. The multi-arch push only runs if this job
   # succeeds. Severities split across two steps — see the comment above them.
   scan:
+    permissions:
+      contents: read
+      security-events: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -116,9 +114,14 @@ jobs:
 
       - name: Publish scan report
         if: always()
+        # Via env, not `${{ }}` inline: an expression is expanded before bash
+        # parses the line, so a caller-supplied severity could inject a command.
+        env:
+          TRIVY_REPORT_SEVERITY: ${{ inputs.trivy_report_severity }}
+          TRIVY_IGNORE_UNFIXED: ${{ inputs.trivy_ignore_unfixed }}
         run: |
           {
-            echo "### Image scan — ${{ inputs.trivy_report_severity }} (fixable only: ${{ inputs.trivy_ignore_unfixed }})"
+            echo "### Image scan — ${TRIVY_REPORT_SEVERITY} (fixable only: ${TRIVY_IGNORE_UNFIXED})"
             echo '```'
             cat trivy-report.txt 2>/dev/null || echo "(no report produced)"
             echo '```'
@@ -146,6 +149,9 @@ jobs:
 
   build:
     needs: scan
+    permissions:
+      contents: read
+      packages: write
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.build.outputs.digest }}
@@ -156,8 +162,12 @@ jobs:
 
       - name: Resolve image name
         id: name
+        # Same reason as the scan job's report step: quoting does not help,
+        # because the expression is substituted into the script before bash runs.
+        env:
+          IMAGE_NAME_INPUT: ${{ inputs.image_name }}
         run: |
-          NAME="${{ inputs.image_name }}"
+          NAME="$IMAGE_NAME_INPUT"
           if [ -z "$NAME" ]; then NAME="${GITHUB_REPOSITORY##*/}"; fi
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${NAME,,}" >> "$GITHUB_OUTPUT"
 
