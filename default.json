@@ -93,7 +93,7 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Track the Trivy binary that trivy-action installs. Renovate sees the action's own pin but not the scanner inside it, which sat four minor versions behind trivy itself while the action pin was already current.",
+      "description": "Track the Trivy binary trivy-action installs: Renovate sees the action pin, not the scanner inside it.",
       "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
       "matchStrings": ["version:\\s*(?<currentValue>v[0-9][^\\s#]*)\\s*#\\s*renovate:\\s*aquasecurity/trivy"],
       "datasourceTemplate": "github-releases",
