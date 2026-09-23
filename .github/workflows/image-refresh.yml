@@ -68,9 +68,8 @@ jobs:
           set -euo pipefail
           image="${IMAGE_INPUT:-ghcr.io/${GITHUB_REPOSITORY,,}:latest}"
           docker pull -q --platform "$PLATFORM" "$image" >/dev/null
-          # Root and a plain shell: the image's USER and ENTRYPOINT do not matter
-          # to the package manager. Anything but a clean answer fails the job, so
-          # an unreadable image can never be mistaken for an up-to-date one.
+          # Root and a plain shell: USER and ENTRYPOINT do not matter to the package manager.
+          # Anything but a clean answer fails the job, so an unreadable image never reads as current.
           pending=$(docker run --rm --platform "$PLATFORM" --user 0 --entrypoint sh "$image" -c '
             set -e
             if [ -f /etc/alpine-release ]; then
