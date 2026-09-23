@@ -17,17 +17,23 @@ on:
       - '.github/workflows/stale-issues.yml'
       - '.github/workflows/notify-discord.yml'
       - '.github/workflows/smoke-reusables.yml'
+      - '.github/workflows/docker-build.yml'
+      - 'scripts/tests/fixtures/healthcheck/**'
   pull_request:
     paths:
       - '.github/workflows/stale-issues.yml'
       - '.github/workflows/notify-discord.yml'
       - '.github/workflows/smoke-reusables.yml'
+      - '.github/workflows/docker-build.yml'
+      - 'scripts/tests/fixtures/healthcheck/**'
   workflow_dispatch:
 
 permissions:
   contents: read
   issues: write
   pull-requests: write
+  # docker-build's scan legs upload their Trivy SARIF.
+  security-events: write
 
 jobs:
   smoke-stale:
@@ -46,3 +52,21 @@ jobs:
       status: info
       title: "smoke test — should not post"
       dry_run: true
+
+  # A build on both platforms, never pushed, ending in the HEALTHCHECK smoke
+  # gate. Exercises the plan/scan contract and the native arm64 leg on a
+  # fixture image that turns healthy in seconds.
+  smoke-docker-build:
+    name: docker-build (scan + healthcheck, no push)
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/docker-build.yml
+    with:
+      image_name: smoke-fixture
+      dockerfile_path: scripts/tests/fixtures/healthcheck/Dockerfile
+      build_context: scripts/tests/fixtures/healthcheck
+      platforms: linux/amd64,linux/arm64
+      push: false
+      smoke_healthcheck: true
+      smoke_timeout: 60
