@@ -3,5 +3,5 @@
 # and the smoke's Trivy gate is never red over the fixture itself.
 FROM alpine:3.24
 RUN apk upgrade --no-cache
-HEALTHCHECK --interval=3s --timeout=2s --start-period=1s --retries=2 CMD ["/bin/false"]
+HEALTHCHECK --interval=3s --timeout=2s --start-period=1s --retries=2 CMD ["/bin/true"]
 CMD ["sleep", "300"]
