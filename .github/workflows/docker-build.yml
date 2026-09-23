@@ -96,7 +96,8 @@ jobs:
         run: |
           set -euo pipefail
           list=$(jq -Rc --arg t "${TARGET:-final}" 'split(",") | map(gsub("^\\s+|\\s+$"; ""))
-            | map(select(length > 0)) | map({platform: ., id: "\($t)-\(gsub("/"; "-"))"})' <<< "$PLATFORMS")
+            | map(select(length > 0)) | map({platform: ., id: "\($t)-\(gsub("/"; "-"))"})
+            | unique_by(.id)' <<< "$PLATFORMS")
           if [ "$(jq length <<< "$list")" -eq 0 ]; then
             echo "::error::platforms is empty, so nothing would be scanned."
             exit 1
