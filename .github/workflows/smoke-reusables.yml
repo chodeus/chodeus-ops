@@ -32,8 +32,6 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
-  # docker-build's scan legs upload their Trivy SARIF.
-  security-events: write
 
 jobs:
   smoke-stale:
@@ -58,8 +56,11 @@ jobs:
   # fixture image that turns healthy in seconds.
   smoke-docker-build:
     name: docker-build (scan + healthcheck, no push)
+    # security-events: the legs' SARIF upload. packages: write is what the
+    # build job declares; push false skips it, but the grant is checked at startup.
     permissions:
       contents: read
+      packages: write
       security-events: write
     uses: ./.github/workflows/docker-build.yml
     with:
