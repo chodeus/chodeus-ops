@@ -27,7 +27,7 @@ jobs:
   notify:
     if: always() && github.event_name != 'pull_request'
     needs: build
-    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@69da92834f50ecc5e040c89699775bbbdca2381c # pinned (smoke gate, native arm64 legs)
+    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@69da92834f50ecc5e040c89699775bbbdca2381c # pinned, same commit as docker-build
     with:
       event_type: build
       status: ${{ needs.build.result == 'success' && 'success' || 'failure' }}

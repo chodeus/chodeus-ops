@@ -5,9 +5,8 @@ name: Smoke tests — reusables
 # a reusable reaches downstream repos. Static analysis (actionlint) can't
 # do this across the workflow_call boundary.
 #
-# Keep additions cheap — reusables that need fake source trees (docker,
-# python, node, codeql) aren't smoked here; add only when a contract
-# breakage in one of them actually bites.
+# Keep additions cheap: a reusable that needs a source tree gets a fixture under
+# scripts/tests/fixtures/ only when its contract is worth exercising on every change.
 
 on:
   push:
@@ -55,8 +54,8 @@ jobs:
   # plan/scan contract and the native arm64 leg on a fixture healthy in seconds.
   smoke-docker-build:
     name: docker-build (scan + healthcheck, no push)
-    # security-events: the legs' SARIF upload. packages: write is what the
-    # build job declares; push false skips it, but the grant is checked at startup.
+    # security-events: the legs' SARIF upload. packages: write is what the build job
+    # declares; push false skips it, but GitHub checks the grant at startup (run 35833873740 died without it).
     permissions:
       contents: read
       packages: write
