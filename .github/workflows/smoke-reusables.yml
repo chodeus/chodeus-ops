@@ -14,22 +14,52 @@ on:
     branches:
       - main
     paths:
+      - '.github/workflows/image-refresh.yml'
       - '.github/workflows/stale-issues.yml'
       - '.github/workflows/notify-discord.yml'
       - '.github/workflows/smoke-reusables.yml'
   pull_request:
     paths:
+      - '.github/workflows/image-refresh.yml'
       - '.github/workflows/stale-issues.yml'
       - '.github/workflows/notify-discord.yml'
       - '.github/workflows/smoke-reusables.yml'
   workflow_dispatch:
 
 permissions:
+  # image-refresh's check pulls from GHCR.
+  packages: read
   contents: read
   issues: write
   pull-requests: write
 
 jobs:
+  # An image old enough to always have pending upgrades, with dispatch off:
+  # exercises the drift check end to end without starting anything.
+  smoke-image-refresh:
+    name: image-refresh (dispatch off)
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/image-refresh.yml
+    with:
+      image: alpine:3.20.0
+      workflow: smoke-reusables.yml
+      dispatch: false
+
+  smoke-image-refresh-assert:
+    name: image-refresh (stale detected)
+    needs: smoke-image-refresh
+    permissions: {}
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          STALE: ${{ needs.smoke-image-refresh.outputs.stale }}
+          PENDING: ${{ needs.smoke-image-refresh.outputs.pending }}
+        run: |
+          echo "stale=${STALE} pending=${PENDING}"
+          [ "$STALE" = "true" ] && [ "$PENDING" -gt 0 ]
+
   smoke-stale:
     name: stale-issues (no-op days)
     uses: ./.github/workflows/stale-issues.yml
