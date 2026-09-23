@@ -68,12 +68,14 @@ on:
         required: false
 
 jobs:
-  # Turns the comma-separated platforms input into the scan matrix. Each leg's id
-  # (target + platform) keys its cache scope and SARIF category.
-  platforms:
+  # Single owner of what this invocation publishes: the image, the normalized
+  # platforms, and one id per leg keying its cache scope and SARIF category.
+  plan:
     permissions: {}
     runs-on: ubuntu-latest
     outputs:
+      image: ${{ steps.split.outputs.image }}
+      platforms: ${{ steps.split.outputs.platforms }}
       list: ${{ steps.split.outputs.list }}
       cache_from: ${{ steps.split.outputs.cache_from }}
     steps:
@@ -88,22 +90,32 @@ jobs:
         run: |
           echo "::warning::target '$TARGET' publishes to the default references. Any sibling target without image_name or tag_suffix overwrites it."
 
-      - name: Split platforms
+      - name: Plan image and platforms
         id: split
+        # Via env: an expression is expanded before bash parses the line.
         env:
+          IMAGE_NAME_INPUT: ${{ inputs.image_name }}
+          TAG_SUFFIX: ${{ inputs.tag_suffix }}
           PLATFORMS: ${{ inputs.platforms }}
           TARGET: ${{ inputs.target }}
         run: |
           set -euo pipefail
-          list=$(jq -Rc --arg t "${TARGET:-final}" 'split(",") | map(gsub("^\\s+|\\s+$"; ""))
-            | map(select(length > 0)) | map({platform: ., id: "\($t)-\(gsub("/"; "-"))"})
+          name="${IMAGE_NAME_INPUT:-${GITHUB_REPOSITORY##*/}}"
+          # The id must differ wherever the published output does: sibling
+          # invocations in one run share the cache and the SARIF namespace.
+          list=$(jq -Rc --arg k "${name}${TAG_SUFFIX}-${TARGET:-final}" 'split(",")
+            | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))
+            | map({platform: ., id: ("\($k)-\(.)" | ascii_downcase | gsub("[^a-z0-9._-]"; "-"))})
             | unique_by(.id)' <<< "$PLATFORMS")
           if [ "$(jq length <<< "$list")" -eq 0 ]; then
             echo "::error::platforms is empty, so nothing would be scanned."
             exit 1
           fi
-          echo "list=$list" >> "$GITHUB_OUTPUT"
           {
+            echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${name,,}"
+            echo "list=$list"
+            # build publishes exactly this list, so nothing unscanned can ship.
+            echo "platforms=$(jq -r 'map(.platform) | join(",")' <<< "$list")"
             echo 'cache_from<<EOF'
             jq -r '.[] | "type=gha,scope=\(.id)"' <<< "$list"
             echo 'EOF'
@@ -113,7 +125,7 @@ jobs:
   # land BEFORE anything reaches GHCR. The push only runs if every leg passes.
   scan:
     name: scan (${{ matrix.platform }})
-    needs: platforms
+    needs: plan
     # contents: checkout. security-events: the Trivy SARIF upload.
     permissions:
       contents: read
@@ -123,7 +135,7 @@ jobs:
       # One arch failing must not hide the other's report.
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.platforms.outputs.list) }}
+        include: ${{ fromJSON(needs.plan.outputs.list) }}
     env:
       # Trivy assumes linux/amd64 unless told, and aborts on an image without it.
       TRIVY_PLATFORM: ${{ matrix.platform }}
@@ -208,7 +220,7 @@ jobs:
           category: trivy-image-${{ matrix.id }}
 
   build:
-    needs: [platforms, scan]
+    needs: [plan, scan]
     # Only exists when actually publishing, so a verification run never holds a
     # token with packages: write. Every platform is already built in scan.
     if: ${{ inputs.push }}
@@ -223,17 +235,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-
-      - name: Resolve image name
-        id: name
-        # Same reason as the scan job's report step: quoting does not help,
-        # because the expression is substituted into the script before bash runs.
-        env:
-          IMAGE_NAME_INPUT: ${{ inputs.image_name }}
-        run: |
-          NAME="$IMAGE_NAME_INPUT"
-          if [ -z "$NAME" ]; then NAME="${GITHUB_REPOSITORY##*/}"; fi
-          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${NAME,,}" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
@@ -252,7 +253,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
         with:
-          images: ${{ steps.name.outputs.image }}
+          images: ${{ needs.plan.outputs.image }}
           # Empty suffix yields an empty flavor, which is the action's default.
           flavor: ${{ inputs.tag_suffix != '' && format('suffix={0},onlatest=true', inputs.tag_suffix) || '' }}
           tags: |
@@ -271,7 +272,7 @@ jobs:
         with:
           context: ${{ inputs.build_context }}
           file: ${{ inputs.dockerfile_path }}
-          platforms: ${{ inputs.platforms }}
+          platforms: ${{ needs.plan.outputs.platforms }}
           push: ${{ inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -280,4 +281,4 @@ jobs:
           provenance: true
           sbom: true
           # The scan legs wrote one scope per platform; this build only reads them.
-          cache-from: ${{ needs.platforms.outputs.cache_from }}
+          cache-from: ${{ needs.plan.outputs.cache_from }}
