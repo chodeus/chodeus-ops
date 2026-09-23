@@ -63,6 +63,16 @@ on:
         required: false
         type: string
         default: ''
+      smoke_healthcheck:
+        description: 'Start each scanned image and wait for its own HEALTHCHECK to report healthy before anything is pushed. The image must define one; an image without a HEALTHCHECK fails the leg rather than passing by default.'
+        required: false
+        type: boolean
+        default: false
+      smoke_timeout:
+        description: 'Seconds to wait for healthy. Cover the HEALTHCHECK start-period plus a few intervals.'
+        required: false
+        type: number
+        default: 120
     secrets:
       DISCORD_WEBHOOK_URL:
         required: false
@@ -106,9 +116,14 @@ jobs:
           sum=$(printf '%s\0%s\0%s' "$name" "$TAG_SUFFIX" "$TARGET" | sha256sum)
           key="${name}${TAG_SUFFIX}-${TARGET:-final}-${sum:0:8}"
           # Slurped, and split on newlines too: build-push-action accepts either.
+          # A platform with a hosted runner of its own arch builds there; anything
+          # else builds under QEMU on the default runner.
           list=$(jq -Rsc --arg k "$key" '[splits("[,\n]")]
             | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))
-            | map({platform: ., id: ("\($k)-\(.)" | ascii_downcase | gsub("[^a-z0-9._-]"; "-"))})
+            | map({platform: ., id: ("\($k)-\(.)" | ascii_downcase | gsub("[^a-z0-9._-]"; "-"))}
+                  + (if . == "linux/arm64" or . == "linux/arm64/v8" then {runner: "ubuntu-24.04-arm", qemu: false}
+                     elif . == "linux/amd64" then {runner: "ubuntu-latest", qemu: false}
+                     else {runner: "ubuntu-latest", qemu: true} end))
             | unique_by(.id)' <<< "$PLATFORMS")
           if [ "$(jq length <<< "$list")" -eq 0 ]; then
             echo "::error::platforms is empty, so nothing would be scanned."
@@ -133,7 +148,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       # One arch failing must not hide the other's report.
       fail-fast: false
@@ -147,6 +162,7 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Set up QEMU
+        if: ${{ matrix.qemu }}
         uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
 
       - name: Set up Buildx
@@ -167,6 +183,52 @@ jobs:
           # Per-platform scope: legs sharing one scope overwrite each other's cache.
           cache-from: type=gha,scope=${{ matrix.id }}
           cache-to: type=gha,mode=max,scope=${{ matrix.id }}
+
+      # The image's own HEALTHCHECK is the runtime gate: a build that scans clean
+      # but never comes up must not reach GHCR either.
+      - name: Smoke test (HEALTHCHECK)
+        if: ${{ inputs.smoke_healthcheck }}
+        env:
+          IMAGE: chodeus-scan:${{ github.sha }}
+          PLATFORM: ${{ matrix.platform }}
+          TIMEOUT: ${{ inputs.smoke_timeout }}
+        run: |
+          set -euo pipefail
+          # A number input admits 0.5, which the arithmetic below rejects cryptically.
+          case "$TIMEOUT" in
+            ''|*[!0-9]*) echo "::error::smoke_timeout must be a whole number of seconds, got '${TIMEOUT}'."; exit 1 ;;
+          esac
+          if [ "$TIMEOUT" -lt 1 ]; then
+            echo "::error::smoke_timeout must be at least 1 second, got ${TIMEOUT}."
+            exit 1
+          fi
+          hc=$(docker inspect -f '{{if .Config.Healthcheck}}{{index .Config.Healthcheck.Test 0}}{{else}}NONE{{end}}' "$IMAGE")
+          if [ "$hc" = "NONE" ]; then
+            echo "::error::the image defines no HEALTHCHECK, so smoke_healthcheck has nothing to wait for."
+            exit 1
+          fi
+          cid=$(docker run -d --platform "$PLATFORM" "$IMAGE")
+          # The log tail lands in the run either way; it is the only clue when a leg fails.
+          trap 'echo "--- container log (tail)"; docker logs --tail 40 "$cid" 2>&1 || true; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          started=$SECONDS
+          # timeout owns the deadline, so a healthy seen after it can never be accepted.
+          if timeout "$TIMEOUT" bash -c '
+            while :; do
+              case "$(docker inspect -f "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" "$1")" in
+                "running healthy")   exit 0 ;;
+                "running unhealthy") echo "::error::the container reported unhealthy."; exit 1 ;;
+                "running starting"|"running none") sleep 2 ;;
+                *) echo "::error::the container is not running."; exit 1 ;;
+              esac
+            done' _ "$cid"; then
+            echo "healthy after $((SECONDS - started))s"
+          else
+            rc=$?
+            if [ "$rc" -eq 124 ]; then
+              echo "::error::not healthy within ${TIMEOUT}s (last state: $(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid"))."
+            fi
+            exit 1
+          fi
 
       # Two tiers on purpose. The report tier is the wide net and never blocks;
       # the gate tier is narrow and blocks. Both honour trivy_ignore_unfixed, so
