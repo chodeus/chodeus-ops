@@ -68,15 +68,16 @@ on:
         required: false
 
 jobs:
-  # Build the image locally (single platform, no push) and scan it, so findings
-  # land BEFORE anything reaches GHCR. The multi-arch push only runs if this job
-  # succeeds. Severities split across two steps — see the comment above them.
-  scan:
-    # contents: checkout. security-events: the Trivy SARIF upload.
-    permissions:
-      contents: read
-      security-events: write
+  # Single owner of what this invocation publishes: the image, the normalized
+  # platforms, and one id per leg keying its cache scope and SARIF category.
+  plan:
+    permissions: {}
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.split.outputs.image }}
+      platforms: ${{ steps.split.outputs.platforms }}
+      list: ${{ steps.split.outputs.list }}
+      cache_from: ${{ steps.split.outputs.cache_from }}
     steps:
       # Two invocations differing only in `target` resolve the same image name and
       # the same tags, so a later push replaces the earlier target. This warns
@@ -89,6 +90,59 @@ jobs:
         run: |
           echo "::warning::target '$TARGET' publishes to the default references. Any sibling target without image_name or tag_suffix overwrites it."
 
+      - name: Plan image and platforms
+        id: split
+        # Via env: an expression is expanded before bash parses the line.
+        env:
+          IMAGE_NAME_INPUT: ${{ inputs.image_name }}
+          TAG_SUFFIX: ${{ inputs.tag_suffix }}
+          PLATFORMS: ${{ inputs.platforms }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          name="${IMAGE_NAME_INPUT:-${GITHUB_REPOSITORY##*/}}"
+          # Siblings in one run share cache and SARIF namespaces, so the id must differ
+          # wherever the output does; the hash separates what the prefix runs together.
+          sum=$(printf '%s\0%s\0%s' "$name" "$TAG_SUFFIX" "$TARGET" | sha256sum)
+          key="${name}${TAG_SUFFIX}-${TARGET:-final}-${sum:0:8}"
+          # Slurped, and split on newlines too: build-push-action accepts either.
+          list=$(jq -Rsc --arg k "$key" '[splits("[,\n]")]
+            | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))
+            | map({platform: ., id: ("\($k)-\(.)" | ascii_downcase | gsub("[^a-z0-9._-]"; "-"))})
+            | unique_by(.id)' <<< "$PLATFORMS")
+          if [ "$(jq length <<< "$list")" -eq 0 ]; then
+            echo "::error::platforms is empty, so nothing would be scanned."
+            exit 1
+          fi
+          {
+            echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${name,,}"
+            echo "list=$list"
+            # build publishes exactly this list, so nothing unscanned can ship.
+            echo "platforms=$(jq -r 'map(.platform) | join(",")' <<< "$list")"
+            echo 'cache_from<<EOF'
+            jq -r '.[] | "type=gha,scope=\(.id)"' <<< "$list"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+  # Build and scan every published platform locally, with no push, so findings
+  # land BEFORE anything reaches GHCR. The push only runs if every leg passes.
+  scan:
+    name: scan (${{ matrix.platform }})
+    needs: plan
+    # contents: checkout. security-events: the Trivy SARIF upload.
+    permissions:
+      contents: read
+      security-events: write
+    runs-on: ubuntu-latest
+    strategy:
+      # One arch failing must not hide the other's report.
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.list) }}
+    env:
+      # Trivy assumes linux/amd64 unless told, and aborts on an image without it.
+      TRIVY_PLATFORM: ${{ matrix.platform }}
+    steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
@@ -103,17 +157,16 @@ jobs:
         with:
           context: ${{ inputs.build_context }}
           file: ${{ inputs.dockerfile_path }}
-          # Single platform only: buildx can `load` into the local daemon for
-          # scanning; a multi-arch manifest cannot be loaded. The remaining
-          # platforms are built by the validation step at the end of this job.
-          platforms: linux/amd64
+          # One platform per leg: a multi-arch manifest cannot be loaded.
+          platforms: ${{ matrix.platform }}
           load: true
           push: false
           tags: chodeus-scan:${{ github.sha }}
           target: ${{ inputs.target }}
           build-args: ${{ inputs.build_args }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Per-platform scope: legs sharing one scope overwrite each other's cache.
+          cache-from: type=gha,scope=${{ matrix.id }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.id }}
 
       # Two tiers on purpose. The report tier is the wide net and never blocks;
       # the gate tier is narrow and blocks. Both honour trivy_ignore_unfixed, so
@@ -140,7 +193,7 @@ jobs:
           TRIVY_IGNORE_UNFIXED: ${{ inputs.trivy_ignore_unfixed }}
         run: |
           {
-            echo "### Image scan — ${TRIVY_REPORT_SEVERITY} (fixable only: ${TRIVY_IGNORE_UNFIXED})"
+            echo "### Image scan — ${TRIVY_PLATFORM} — ${TRIVY_REPORT_SEVERITY} (fixable only: ${TRIVY_IGNORE_UNFIXED})"
             echo '```'
             cat trivy-report.txt 2>/dev/null || echo "(no report produced)"
             echo '```'
@@ -166,25 +219,11 @@ jobs:
         uses: github/codeql-action/upload-sarif@4e828ff8d448a8a6e532957b1811f387a63867e8 # v3.29.4
         with:
           sarif_file: trivy-image.sarif
-          category: trivy-image
-
-      # Every platform gets built here, not in the push job, so a no-push run
-      # never needs a job holding packages: write. Runs after the gate so a
-      # vulnerable image fails before the slow emulated arches are built.
-      - name: Validate all platforms build
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
-        with:
-          context: ${{ inputs.build_context }}
-          file: ${{ inputs.dockerfile_path }}
-          platforms: ${{ inputs.platforms }}
-          push: false
-          target: ${{ inputs.target }}
-          build-args: ${{ inputs.build_args }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Per leg, target included: a repeated category in one run fails the upload.
+          category: trivy-image-${{ matrix.id }}
 
   build:
-    needs: scan
+    needs: [plan, scan]
     # Only exists when actually publishing, so a verification run never holds a
     # token with packages: write. Every platform is already built in scan.
     if: ${{ inputs.push }}
@@ -199,17 +238,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-
-      - name: Resolve image name
-        id: name
-        # Same reason as the scan job's report step: quoting does not help,
-        # because the expression is substituted into the script before bash runs.
-        env:
-          IMAGE_NAME_INPUT: ${{ inputs.image_name }}
-        run: |
-          NAME="$IMAGE_NAME_INPUT"
-          if [ -z "$NAME" ]; then NAME="${GITHUB_REPOSITORY##*/}"; fi
-          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${NAME,,}" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
@@ -228,7 +256,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
         with:
-          images: ${{ steps.name.outputs.image }}
+          images: ${{ needs.plan.outputs.image }}
           # Empty suffix yields an empty flavor, which is the action's default.
           flavor: ${{ inputs.tag_suffix != '' && format('suffix={0},onlatest=true', inputs.tag_suffix) || '' }}
           tags: |
@@ -247,7 +275,7 @@ jobs:
         with:
           context: ${{ inputs.build_context }}
           file: ${{ inputs.dockerfile_path }}
-          platforms: ${{ inputs.platforms }}
+          platforms: ${{ needs.plan.outputs.platforms }}
           push: ${{ inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -255,5 +283,5 @@ jobs:
           build-args: ${{ inputs.build_args }}
           provenance: true
           sbom: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # The scan legs wrote one scope per platform; this build only reads them.
+          cache-from: ${{ needs.plan.outputs.cache_from }}
