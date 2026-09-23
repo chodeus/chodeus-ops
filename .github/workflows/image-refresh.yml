@@ -1,0 +1,130 @@
+name: Reusable — Image refresh
+
+# Checks a published image for pending package upgrades and, if any, dispatches the
+# caller's publish workflow, whose own gates decide whether the refresh ships.
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: 'Full image reference to check. Empty = ghcr.io/<owner>/<repo>:latest.'
+        required: false
+        type: string
+        default: ''
+      platform:
+        description: 'Platform to pull for the check. Results cover only this platform; an upgrade published for another arch alone is missed until this one also has one.'
+        required: false
+        type: string
+        default: 'linux/amd64'
+      workflow:
+        description: 'Workflow file in the calling repo to dispatch when the image is stale, e.g. docker-publish.yml. It must accept workflow_dispatch.'
+        required: true
+        type: string
+      ref:
+        description: 'Branch to dispatch the workflow on. Empty = the branch this run is on.'
+        required: false
+        type: string
+        default: ''
+      dispatch:
+        description: 'False reports drift without dispatching anything.'
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      stale:
+        description: 'true when the image has pending package upgrades.'
+        value: ${{ jobs.check.outputs.stale }}
+      pending:
+        description: 'Number of pending package upgrades.'
+        value: ${{ jobs.check.outputs.pending }}
+
+jobs:
+  check:
+    name: check (${{ inputs.platform }})
+    # packages: the GHCR pull. Nothing here writes or checks out.
+    permissions:
+      packages: read
+    runs-on: ubuntu-latest
+    outputs:
+      stale: ${{ steps.drift.outputs.stale }}
+      pending: ${{ steps.drift.outputs.pending }}
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pending package upgrades
+        id: drift
+        env:
+          IMAGE_INPUT: ${{ inputs.image }}
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          set -euo pipefail
+          image="${IMAGE_INPUT:-ghcr.io/${GITHUB_REPOSITORY,,}:latest}"
+          docker pull -q --platform "$PLATFORM" "$image" >/dev/null
+          # Root and a plain shell: USER and ENTRYPOINT do not matter to the package manager.
+          # Anything but a clean answer fails the job, so an unreadable image never reads as current.
+          # Each query is captured before it is filtered: in a pipeline only the last
+          # command's status counts, and a failed query must never read as "nothing pending".
+          pending=$(docker run --rm --platform "$PLATFORM" --user 0 --entrypoint sh "$image" -c '
+            set -e
+            # Old indexes are cleared first, so an index found after the update came from it.
+            if [ -f /etc/alpine-release ]; then
+              rm -f /var/cache/apk/APKINDEX.*
+              apk update -q >/dev/null
+              ls /var/cache/apk/APKINDEX.*.tar.gz >/dev/null 2>&1 || { echo "no package index: no repositories configured" >&2; exit 5; }
+              ver=$(apk version -l "<")
+              printf "%s\n" "$ver" | tail -n +2
+            elif [ -f /etc/debian_version ]; then
+              export DEBIAN_FRONTEND=noninteractive
+              rm -f /var/lib/apt/lists/*_Packages*
+              upd=$(apt-get update -qq 2>&1) || { printf "%s\n" "$upd" >&2; exit 4; }
+              if printf "%s\n" "$upd" | grep -q "^[WE]:"; then printf "%s\n" "$upd" >&2; exit 4; fi
+              ls /var/lib/apt/lists/*_Packages* >/dev/null 2>&1 || { echo "no package index: no sources configured" >&2; exit 5; }
+              sim=$(apt-get -s -qq upgrade)
+              printf "%s\n" "$sim" | grep "^Inst " || true
+            else
+              echo "unsupported distro: neither /etc/alpine-release nor /etc/debian_version" >&2
+              exit 3
+            fi')
+          count=$(printf '%s\n' "$pending" | grep -c . || true)
+          {
+            echo "### Image refresh — ${image} (${PLATFORM})"
+            if [ "$count" -eq 0 ]; then
+              echo "No pending package upgrades."
+            else
+              echo "${count} pending package upgrade(s):"
+              echo '```'
+              printf '%s\n' "$pending"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "pending=${count}"
+            if [ "$count" -gt 0 ]; then echo "stale=true"; else echo "stale=false"; fi
+          } >> "$GITHUB_OUTPUT"
+
+  dispatch:
+    name: dispatch
+    needs: check
+    if: ${{ inputs.dispatch && needs.check.outputs.stale == 'true' }}
+    # actions: the workflow_dispatch. A run started this way with the job
+    # token is one of the two event types GitHub does create runs for.
+    permissions:
+      actions: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run the publish workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          WORKFLOW: ${{ inputs.workflow }}
+          REF: ${{ inputs.ref || github.ref_name }}
+          PENDING: ${{ needs.check.outputs.pending }}
+        run: |
+          set -euo pipefail
+          gh workflow run "$WORKFLOW" --ref "$REF"
+          echo "Dispatched ${WORKFLOW} on ${REF}: ${PENDING} pending package upgrade(s)." | tee -a "$GITHUB_STEP_SUMMARY"
