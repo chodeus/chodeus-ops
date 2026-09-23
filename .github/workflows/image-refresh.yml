@@ -1,9 +1,7 @@
 name: Reusable — Image refresh
 
-# Keeps a published image patched between releases. The check pulls the image,
-# asks its own package manager what an upgrade would install, and when anything
-# is pending dispatches the calling repo's publish workflow. That workflow's
-# build, scan and smoke gates then decide whether the refreshed image ships.
+# Checks a published image for pending package upgrades and, if any, dispatches the
+# caller's publish workflow, whose own gates decide whether the refresh ships.
 
 on:
   workflow_call:
@@ -70,15 +68,20 @@ jobs:
           docker pull -q --platform "$PLATFORM" "$image" >/dev/null
           # Root and a plain shell: USER and ENTRYPOINT do not matter to the package manager.
           # Anything but a clean answer fails the job, so an unreadable image never reads as current.
+          # Each query is captured before it is filtered: in a pipeline only the last
+          # command's status counts, and a failed query must never read as "nothing pending".
           pending=$(docker run --rm --platform "$PLATFORM" --user 0 --entrypoint sh "$image" -c '
             set -e
             if [ -f /etc/alpine-release ]; then
               apk update -q >/dev/null
-              apk version -l "<" | tail -n +2
+              ver=$(apk version -l "<")
+              printf "%s\n" "$ver" | tail -n +2
             elif [ -f /etc/debian_version ]; then
               export DEBIAN_FRONTEND=noninteractive
-              apt-get update -qq >/dev/null
-              apt-get -s -qq upgrade | grep "^Inst " || true
+              upd=$(apt-get update -qq 2>&1) || { printf "%s\n" "$upd" >&2; exit 4; }
+              if printf "%s\n" "$upd" | grep -q "^[WE]:"; then printf "%s\n" "$upd" >&2; exit 4; fi
+              sim=$(apt-get -s -qq upgrade)
+              printf "%s\n" "$sim" | grep "^Inst " || true
             else
               echo "unsupported distro: neither /etc/alpine-release nor /etc/debian_version" >&2
               exit 3
