@@ -27,8 +27,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  # image-refresh's check pulls from GHCR.
-  packages: read
   contents: read
   issues: write
   pull-requests: write
@@ -38,9 +36,12 @@ jobs:
   # exercises the drift check end to end without starting anything.
   smoke-image-refresh:
     name: image-refresh (dispatch off)
+    # packages: the pull. actions: write is what the dispatch job declares;
+    # dispatch false skips it, but the grant is checked at startup.
     permissions:
       contents: read
       packages: read
+      actions: write
     uses: ./.github/workflows/image-refresh.yml
     with:
       image: alpine:3.20.0
