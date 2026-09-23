@@ -51,9 +51,8 @@ jobs:
       title: "smoke test — should not post"
       dry_run: true
 
-  # A build on both platforms, never pushed, ending in the HEALTHCHECK smoke
-  # gate. Exercises the plan/scan contract and the native arm64 leg on a
-  # fixture image that turns healthy in seconds.
+  # Both platforms, never pushed, through the HEALTHCHECK gate: exercises the
+  # plan/scan contract and the native arm64 leg on a fixture healthy in seconds.
   smoke-docker-build:
     name: docker-build (scan + healthcheck, no push)
     # security-events: the legs' SARIF upload. packages: write is what the
