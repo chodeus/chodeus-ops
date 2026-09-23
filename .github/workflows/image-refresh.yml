@@ -73,12 +73,14 @@ jobs:
             set -e
             if [ -f /etc/alpine-release ]; then
               apk update -q >/dev/null
+              ls /var/cache/apk/APKINDEX.*.tar.gz >/dev/null 2>&1 || { echo "no package index: no repositories configured" >&2; exit 5; }
               ver=$(apk version -l "<")
               printf "%s\n" "$ver" | tail -n +2
             elif [ -f /etc/debian_version ]; then
               export DEBIAN_FRONTEND=noninteractive
               upd=$(apt-get update -qq 2>&1) || { printf "%s\n" "$upd" >&2; exit 4; }
               if printf "%s\n" "$upd" | grep -q "^[WE]:"; then printf "%s\n" "$upd" >&2; exit 4; fi
+              ls /var/lib/apt/lists/*_Packages* >/dev/null 2>&1 || { echo "no package index: no sources configured" >&2; exit 5; }
               sim=$(apt-get -s -qq upgrade)
               printf "%s\n" "$sim" | grep "^Inst " || true
             else
