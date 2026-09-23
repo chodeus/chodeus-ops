@@ -41,9 +41,10 @@
       "platformAutomerge": true
     },
     {
-      "description": "Auto-merge Dockerfile base-image digest bumps once the tag was last pushed at least 3 days ago. Docker Hub supplies that timestamp; a base on a registry without one (GHCR, Quay) is held rather than merged. The repo's required image build is the gate, so a base that breaks the image fails its PR instead of main.",
+      "description": "Auto-merge Dockerfile base-image digest bumps once the tag was last pushed at least 3 days ago. Docker Hub supplies that timestamp; a base on a registry without one (GHCR, Quay) is held rather than merged. The repo's required image build is the gate, so a base that breaks the image fails its PR instead of main. Only version tags qualify: a floating tag (latest, lts, a codename) can carry a major jump, so its digest bumps stay manual.",
       "matchManagers": ["dockerfile"],
       "matchUpdateTypes": ["digest"],
+      "matchCurrentValue": "/^v?\\d/",
       "minimumReleaseAge": "3 days",
       "automerge": true,
       "automergeType": "pr",
