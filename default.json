@@ -7,7 +7,8 @@
     ":semanticCommits",
     ":gitSignOff",
     "schedule:weekends",
-    "group:allNonMajor"
+    "group:allNonMajor",
+    "customManagers:dockerfileVersions"
   ],
   "timezone": "America/Los_Angeles",
   "labels": ["dependencies"],
@@ -25,16 +26,26 @@
   },
   "packageRules": [
     {
-      "description": "Auto-merge minor + patch + pin updates after CI passes (minors added 2026-07-21 once required status checks landed fleet-wide). Dockerfile digest bumps stay manual — a broken base-image digest already broke main once (see commit 513b008). GitHub Actions digests auto-merge after a 7-day release age (rule below); docker-compose digests auto-merge via the rule below.",
+      "description": "Auto-merge minor + patch + pin updates after CI passes (minors added 2026-07-21 once required status checks landed fleet-wide). Digest bumps have their own rules below: GitHub Actions after a 7-day release age, Dockerfile bases after a 3-day release age, docker-compose immediately.",
       "matchUpdateTypes": ["minor", "patch", "pin"],
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
     },
     {
-      "description": "Auto-merge digest bumps for docker-compose (compose.yaml/docker-compose.yml example pins — docs surface, never executed in CI or production). Dockerfile FROM digests are excluded — those drive every build and have caused breakage before.",
+      "description": "Auto-merge digest bumps for docker-compose (compose.yaml/docker-compose.yml example pins — docs surface, never executed in CI or production). Dockerfile FROM digests have their own rule below.",
       "matchManagers": ["docker-compose"],
       "matchUpdateTypes": ["digest"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Auto-merge Dockerfile base-image digest bumps once the tag was last pushed at least 3 days ago. Docker Hub supplies that timestamp; a base on a registry without one (GHCR, Quay) is held rather than merged. The repo's required image build is the gate, so a base that breaks the image fails its PR instead of main. Only version tags qualify: a floating tag (latest, lts, a codename) can carry a major jump, so its digest bumps stay manual.",
+      "matchManagers": ["dockerfile"],
+      "matchUpdateTypes": ["digest"],
+      "matchCurrentValue": "/^v?\\d/",
+      "minimumReleaseAge": "3 days",
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
