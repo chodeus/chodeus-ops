@@ -101,9 +101,12 @@ jobs:
         run: |
           set -euo pipefail
           name="${IMAGE_NAME_INPUT:-${GITHUB_REPOSITORY##*/}}"
-          # The id must differ wherever the published output does: sibling
-          # invocations in one run share the cache and the SARIF namespace.
-          list=$(jq -Rc --arg k "${name}${TAG_SUFFIX}-${TARGET:-final}" 'split(",")
+          # Siblings in one run share cache and SARIF namespaces, so the id must differ
+          # wherever the output does; the hash separates what the prefix runs together.
+          sum=$(printf '%s\0%s\0%s' "$name" "$TAG_SUFFIX" "$TARGET" | sha256sum)
+          key="${name}${TAG_SUFFIX}-${TARGET:-final}-${sum:0:8}"
+          # Slurped, and split on newlines too: build-push-action accepts either.
+          list=$(jq -Rsc --arg k "$key" '[splits("[,\n]")]
             | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))
             | map({platform: ., id: ("\($k)-\(.)" | ascii_downcase | gsub("[^a-z0-9._-]"; "-"))})
             | unique_by(.id)' <<< "$PLATFORMS")
