@@ -15,17 +15,19 @@ jobs:
     # Pin the reusable to an immutable SHA, not @main: a single commit to
     # chodeus-ops main would otherwise execute in every consumer repo with its
     # secrets + write token. Renovate keeps this SHA current with a review PR.
-    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@05f4e436f2400295e71046a85e853b422417b172 # pinned (scan-before-push)
+    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@69da92834f50ecc5e040c89699775bbbdca2381c # pinned (smoke gate, native arm64 legs)
     with:
       # dockerfile_path: deploy/docker/Dockerfile   # uncomment for chub
       # build_context: deploy/docker                # uncomment for chub
       push: ${{ github.event_name != 'pull_request' }}
+      # Wait for the image's own HEALTHCHECK on every platform before pushing.
+      smoke_healthcheck: true
     secrets: inherit
 
   notify:
     if: always() && github.event_name != 'pull_request'
     needs: build
-    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@05f4e436f2400295e71046a85e853b422417b172 # pinned (scan-before-push)
+    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@69da92834f50ecc5e040c89699775bbbdca2381c # pinned (smoke gate, native arm64 legs)
     with:
       event_type: build
       status: ${{ needs.build.result == 'success' && 'success' || 'failure' }}
