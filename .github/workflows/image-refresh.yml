@@ -12,7 +12,7 @@ on:
         type: string
         default: ''
       platform:
-        description: 'Platform to pull for the check. Package updates are per distro release, not per arch, so one platform answers for all of them.'
+        description: 'Platform to pull for the check. Results cover only this platform; an upgrade published for another arch alone is missed until this one also has one.'
         required: false
         type: string
         default: 'linux/amd64'
@@ -41,9 +41,8 @@ on:
 jobs:
   check:
     name: check (${{ inputs.platform }})
-    # packages: the GHCR pull. Nothing here writes.
+    # packages: the GHCR pull. Nothing here writes or checks out.
     permissions:
-      contents: read
       packages: read
     runs-on: ubuntu-latest
     outputs:
