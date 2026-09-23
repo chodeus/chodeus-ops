@@ -41,7 +41,7 @@
       "platformAutomerge": true
     },
     {
-      "description": "Auto-merge Dockerfile base-image digest bumps once the image is at least 3 days old. Where the image build is a required check, its scan and HEALTHCHECK smoke gate fail the PR instead of main when a base breaks the image (commit 513b008 predates both gates). A repo whose image build is not a required check opts out in its own renovate.json.",
+      "description": "Auto-merge Dockerfile base-image digest bumps once the tag was last pushed at least 3 days ago. Docker Hub supplies that timestamp; a base on a registry without one (GHCR, Quay) is held rather than merged. The repo's required image build is the gate, so a base that breaks the image fails its PR instead of main.",
       "matchManagers": ["dockerfile"],
       "matchUpdateTypes": ["digest"],
       "minimumReleaseAge": "3 days",
