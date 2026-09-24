@@ -30,12 +30,15 @@ on:
       patch:
         value: ${{ jobs.release.outputs.patch }}
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   release:
+    permissions:
+      contents: write
+      pull-requests: write
+      # Approves the CI runs on the release PRs; see the last step.
+      actions: write
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
@@ -51,3 +54,37 @@ jobs:
         with:
           config-file: ${{ inputs.config_file }}
           manifest-file: ${{ inputs.manifest_file }}
+
+      # A PR opened or updated with the job token starts its runs awaiting approval.
+      # Runs can appear seconds apart, so poll the full 2 minutes and approve each as it appears.
+      - name: Approve the release PRs' CI runs
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        # Best-effort: a failure here must not fail the release job, which gates the image publish.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRS: ${{ steps.release.outputs.prs }}
+        run: |
+          # No set -e: every API call warns and the next poll is the retry.
+          set -uo pipefail
+          nums=$(jq -r '.[].number' <<< "$PRS")
+          declare -A sha
+          approved=0
+          for i in $(seq 0 12); do
+            for n in $nums; do
+              if [ -z "${sha[$n]:-}" ]; then
+                sha[$n]=$(gh api "repos/$GH_REPO/pulls/$n" --jq .head.sha) || { echo "::warning::Could not read #$n; retrying next poll."; sha[$n]=""; continue; }
+              fi
+              ids=$(gh api --paginate "repos/$GH_REPO/actions/runs?head_sha=${sha[$n]}&status=action_required&event=pull_request" --jq '.workflow_runs[].id') || { echo "::warning::Could not list runs for #$n; retrying next poll."; continue; }
+              for id in $ids; do
+                if gh api -X POST "repos/$GH_REPO/actions/runs/$id/approve" >/dev/null; then
+                  approved=$((approved + 1)); echo "Approved run $id"
+                else
+                  echo "::warning::Could not approve run $id; it may already be approved."
+                fi
+              done
+            done
+            [ "$i" -lt 12 ] && sleep 10
+          done
+          echo "Approved ${approved} run(s) on release PR(s) $(echo $nums | sed 's/[^ ]*/#&/g')." | tee -a "$GITHUB_STEP_SUMMARY"
