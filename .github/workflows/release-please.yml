@@ -14,7 +14,7 @@ on:
         type: string
         default: '.release-please-manifest.json'
       automerge:
-        description: 'Keep open release PRs up to date with the default branch and turn on squash auto-merge, so each release merges itself once its checks pass. Needs "Allow auto-merge" in the repository settings.'
+        description: 'Keep open release PRs up to date with the default branch and squash-merge each one once its required checks pass, then dispatch this workflow so release-please cuts the release. The caller needs workflow_dispatch and a schedule trigger, which is what merges a PR whose checks finish after this run.'
         required: false
         type: boolean
         default: false
@@ -60,8 +60,8 @@ jobs:
           config-file: ${{ inputs.config_file }}
           manifest-file: ${{ inputs.manifest_file }}
 
-      # Opted-in callers only. A behind release PR never merges under strict checks, so update it;
-      # the job token's update starts runs awaiting approval, which the next step approves.
+      # Opted-in callers only. Behind: update it (the next step approves the new runs). Ready: merge it,
+      # then dispatch this workflow, since a merge made with the job token triggers no push workflows.
       - name: Keep the release PRs mergeable
         id: refresh
         if: ${{ inputs.automerge }}
@@ -70,9 +70,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           BASE: ${{ github.event.repository.default_branch }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           set -uo pipefail
-          updated=""
+          updated=""; merged=0
           # Only release-please's own PRs: never a fork branch that borrows the name.
           open=$(gh api --paginate "repos/$GH_REPO/pulls?state=open&per_page=100" --jq ".[] | select(.head.repo.full_name == \"$GH_REPO\" and .base.ref == \"$BASE\" and .user.login == \"github-actions[bot]\" and (.head.ref | startswith(\"release-please--\"))) | .number") || { echo "::warning::Could not list open PRs."; exit 0; }
           for n in $open; do
@@ -85,15 +86,20 @@ jobs:
                 echo "::warning::Could not update #$n."
               fi
             fi
-            state=$(gh api "repos/$GH_REPO/pulls/$n" --jq '"\(.node_id) \(.auto_merge != null)"') || continue
-            node=${state% *}
-            [ "${state#* }" = true ] && { echo "Auto-merge already on for #$n."; continue; }
-            if gh api graphql -f query='mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: SQUASH}) { pullRequest { number } } }' -f id="$node" >/dev/null; then
-              echo "Auto-merge on for #$n."
+            # "clean" means up to date with every required check passed; anything else waits for a later run.
+            [ "${behind:-0}" -gt 0 ] && continue
+            ms=$(gh api "repos/$GH_REPO/pulls/$n" --jq .mergeable_state) || continue
+            if [ "$ms" != clean ]; then echo "#$n is $ms; a later run merges it."; continue; fi
+            if gh api -X PUT "repos/$GH_REPO/pulls/$n/merge" -f merge_method=squash -f sha="$head" >/dev/null; then
+              merged=$((merged + 1)); echo "Merged #$n."
             else
-              echo "::warning::Could not turn on auto-merge for #$n; it may already be on, or the repository may not allow it."
+              echo "::warning::Could not merge #$n."
             fi
           done
+          if [ "$merged" -gt 0 ]; then
+            wf=${WORKFLOW_REF%@*}; wf=${wf##*/}
+            if gh workflow run "$wf" --ref "$BASE"; then echo "Dispatched $wf to cut the release."; else echo "::warning::Could not dispatch $wf; the next push to $BASE cuts the release."; fi
+          fi
           echo "updated=$(echo $updated)" >> "$GITHUB_OUTPUT"
 
       # A PR opened or updated with the job token starts its runs awaiting approval.
