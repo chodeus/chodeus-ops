@@ -10,8 +10,16 @@ on:
   schedule:
     - cron: '0 6 * * 3'  # Wednesdays
 
+permissions:
+  contents: read
+
 jobs:
   analyze:
-    uses: chodeus/chodeus-ops/.github/workflows/codeql.yml@main
+    # What codeql.yml declares; security-events: write uploads the results.
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: chodeus/chodeus-ops/.github/workflows/codeql.yml@b99e2de33ae9b77ee53dbc1c2d35f7eb79b88181 # main
     with:
       languages: '["python"]'  # ["python"], ["javascript"], ["csharp"], or multiple

@@ -66,11 +66,25 @@ jobs:
 
   smoke-stale:
     name: stale-issues (no-op days)
+    permissions:
+      issues: write
+      pull-requests: write
+      actions: write
     uses: ./.github/workflows/stale-issues.yml
     with:
       # 99999 days — no issue/PR will be marked or closed during the smoke.
       days_before_stale: 99999
       days_before_close: 99999
+
+  # No secret passed: must skip, as for a repo without a webhook.
+  smoke-notify-discord-no-webhook:
+    name: notify-discord (no webhook)
+    permissions: {}
+    uses: ./.github/workflows/notify-discord.yml
+    with:
+      event_type: workflow
+      status: info
+      title: "smoke test — no webhook"
 
   smoke-notify-discord:
     name: notify-discord (dry_run)
