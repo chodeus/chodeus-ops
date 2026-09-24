@@ -17,4 +17,4 @@ permissions:
 
 jobs:
   release:
-    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@cb73cc400c62dedbfd26d75df5ca810d86f4f67d # chodeus-ops PR
+    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@8dd0b4ca6f130738ac413a70546f15603358d443 # chodeus-ops PR
