@@ -73,12 +73,12 @@ jobs:
           WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           set -uo pipefail
-          updated=""; merged=0
+          updated=""; waiting=""; merged=0
           # Only release-please's own PRs: never a fork branch that borrows the name.
           open=$(gh api --paginate "repos/$GH_REPO/pulls?state=open&per_page=100" --jq ".[] | select(.head.repo.full_name == \"$GH_REPO\" and .base.ref == \"$BASE\" and .user.login == \"github-actions[bot]\" and (.head.ref | startswith(\"release-please--\"))) | .number") || { echo "::warning::Could not list open PRs."; exit 0; }
           for n in $open; do
             head=$(gh api "repos/$GH_REPO/pulls/$n" --jq .head.sha) || { echo "::warning::Could not read #$n."; continue; }
-            behind=$(gh api "repos/$GH_REPO/compare/$BASE...$head" --jq .behind_by) || behind=0
+            behind=$(gh api "repos/$GH_REPO/compare/$BASE...$head" --jq .behind_by) || { echo "::warning::Could not compare #$n with $BASE; skipping it this run."; continue; }
             if [ "${behind:-0}" -gt 0 ]; then
               if gh api -X PUT "repos/$GH_REPO/pulls/$n/update-branch" -f expected_head_sha="$head" >/dev/null; then
                 updated="$updated $n"; echo "Updated #$n, which was $behind commit(s) behind $BASE."
@@ -86,8 +86,11 @@ jobs:
                 echo "::warning::Could not update #$n."
               fi
             fi
-            # "clean" means up to date with every required check passed; anything else waits for a later run.
             [ "${behind:-0}" -gt 0 ] && continue
+            # Runs an earlier run's window missed are still waiting; hand the PR to the approval step.
+            w=$(gh api "repos/$GH_REPO/actions/runs?head_sha=$head&status=action_required&event=pull_request" --jq .total_count) || w=0
+            [ "${w:-0}" -gt 0 ] && waiting="$waiting $n"
+            # "clean" means up to date with every required check passed; anything else waits for a later run.
             ms=$(gh api "repos/$GH_REPO/pulls/$n" --jq .mergeable_state) || continue
             if [ "$ms" != clean ]; then echo "#$n is $ms; a later run merges it."; continue; fi
             if gh api -X PUT "repos/$GH_REPO/pulls/$n/merge" -f merge_method=squash -f sha="$head" >/dev/null; then
@@ -100,23 +103,23 @@ jobs:
             wf=${WORKFLOW_REF%@*}; wf=${wf##*/}
             if gh workflow run "$wf" --ref "$BASE"; then echo "Dispatched $wf to cut the release."; else echo "::warning::Could not dispatch $wf; the next push to $BASE cuts the release."; fi
           fi
-          echo "updated=$(echo $updated)" >> "$GITHUB_OUTPUT"
+          echo "poll=$(echo $updated $waiting)" >> "$GITHUB_OUTPUT"
 
       # A PR opened or updated with the job token starts its runs awaiting approval.
       # Runs can appear seconds apart, so poll the full 2 minutes and approve each as it appears.
       - name: Approve the release PRs' CI runs
-        if: ${{ steps.release.outputs.prs_created == 'true' || steps.refresh.outputs.updated != '' }}
+        if: ${{ steps.release.outputs.prs_created == 'true' || steps.refresh.outputs.poll != '' }}
         # Best-effort: a failure here must not fail the release job, which gates the image publish.
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PRS: ${{ steps.release.outputs.prs || '[]' }}
-          UPDATED: ${{ steps.refresh.outputs.updated }}
+          POLL: ${{ steps.refresh.outputs.poll }}
         run: |
           # No set -e: every API call warns and the next poll is the retry.
           set -uo pipefail
-          nums=$( { jq -r '.[].number' <<< "$PRS"; for u in $UPDATED; do echo "$u"; done; } | sort -un)
+          nums=$( { jq -r '.[].number' <<< "$PRS"; for u in $POLL; do echo "$u"; done; } | sort -un)
           approved=0
           for i in $(seq 0 12); do
             for n in $nums; do
