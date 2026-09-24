@@ -19,6 +19,8 @@ on:
 permissions:
   issues: write
   pull-requests: write
+  # actions/stale replaces its saved-progress cache via the caches API.
+  actions: write
 
 jobs:
   stale:

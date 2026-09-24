@@ -66,6 +66,10 @@ jobs:
 
   smoke-stale:
     name: stale-issues (no-op days)
+    permissions:
+      issues: write
+      pull-requests: write
+      actions: write
     uses: ./.github/workflows/stale-issues.yml
     with:
       # 99999 days — no issue/PR will be marked or closed during the smoke.
