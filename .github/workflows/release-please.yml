@@ -124,8 +124,9 @@ jobs:
           for i in $(seq 0 12); do
             for n in $nums; do
               # Read every poll: an update-branch moves the head a few seconds after it returns.
+              # This repository's runs only: a fork PR can share the commit, and its approval stays a human's.
               sha=$(gh api "repos/$GH_REPO/pulls/$n" --jq .head.sha) || { echo "::warning::Could not read #$n; retrying next poll."; continue; }
-              ids=$(gh api --paginate "repos/$GH_REPO/actions/runs?head_sha=$sha&status=action_required&event=pull_request" --jq '.workflow_runs[].id') || { echo "::warning::Could not list runs for #$n; retrying next poll."; continue; }
+              ids=$(gh api --paginate "repos/$GH_REPO/actions/runs?head_sha=$sha&status=action_required&event=pull_request" --jq ".workflow_runs[] | select(.head_repository.full_name == \"$GH_REPO\") | .id") || { echo "::warning::Could not list runs for #$n; retrying next poll."; continue; }
               for id in $ids; do
                 if gh api -X POST "repos/$GH_REPO/actions/runs/$id/approve" >/dev/null; then
                   approved=$((approved + 1)); echo "Approved run $id"
