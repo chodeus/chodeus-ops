@@ -23,7 +23,7 @@ jobs:
       security-events: write
     # Pin to an immutable SHA and roll it by hand: Renovate is disabled for
     # chodeus-ops pins, and @main would run every new commit with a write token.
-    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@96cf0be225f5bd5fd4774ea539d9789dd316443e # main
+    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@c36f1a3c7e8108f86b3be0e19c5e0d08502f681f # main
     with:
       # dockerfile_path: deploy/docker/Dockerfile   # when the Dockerfile is not at the root
       # build_context: deploy/docker
@@ -35,7 +35,7 @@ jobs:
     if: always() && github.event_name != 'pull_request'
     needs: build
     permissions: {}
-    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@96cf0be225f5bd5fd4774ea539d9789dd316443e # main
+    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@c36f1a3c7e8108f86b3be0e19c5e0d08502f681f # main
     with:
       event_type: build
       status: ${{ needs.build.result == 'success' && 'success' || 'failure' }}
