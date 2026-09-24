@@ -73,7 +73,8 @@ jobs:
         run: |
           set -uo pipefail
           updated=""
-          open=$(gh api "repos/$GH_REPO/pulls?state=open&per_page=100" --jq '.[] | select(.head.ref | startswith("release-please--")) | .number') || { echo "::warning::Could not list open PRs."; exit 0; }
+          # Only release-please's own PRs: never a fork branch that borrows the name.
+          open=$(gh api --paginate "repos/$GH_REPO/pulls?state=open&per_page=100" --jq ".[] | select(.head.repo.full_name == \"$GH_REPO\" and .base.ref == \"$BASE\" and .user.login == \"github-actions[bot]\" and (.head.ref | startswith(\"release-please--\"))) | .number") || { echo "::warning::Could not list open PRs."; exit 0; }
           for n in $open; do
             head=$(gh api "repos/$GH_REPO/pulls/$n" --jq .head.sha) || { echo "::warning::Could not read #$n."; continue; }
             behind=$(gh api "repos/$GH_REPO/compare/$BASE...$head" --jq .behind_by) || behind=0
