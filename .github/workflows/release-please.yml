@@ -56,7 +56,7 @@ jobs:
           manifest-file: ${{ inputs.manifest_file }}
 
       # A PR opened or updated with the job token starts its runs awaiting approval.
-      # Approve them as they appear; stop after two empty polls once one was found, or at 2 minutes.
+      # Runs can appear seconds apart, so poll the full 2 minutes and approve each as it appears.
       - name: Approve the release PRs' CI runs
         if: ${{ steps.release.outputs.prs_created == 'true' }}
         env:
@@ -68,22 +68,16 @@ jobs:
           nums=$(jq -r '.[].number' <<< "$PRS")
           shas=""
           for n in $nums; do shas="$shas $(gh api "repos/$GH_REPO/pulls/$n" --jq .head.sha)"; done
-          approved=0; quiet=0
+          approved=0
           for _ in $(seq 1 12); do
             ids=""
             for sha in $shas; do
-              ids="$ids $(gh api "repos/$GH_REPO/actions/runs?head_sha=$sha&status=action_required" --jq '[.workflow_runs[].id] | join(" ")')"
+              ids="$ids $(gh api --paginate "repos/$GH_REPO/actions/runs?head_sha=$sha&status=action_required" --jq '.workflow_runs[].id')"
             done
-            ids=$(echo $ids)
-            if [ -z "$ids" ]; then
-              if [ "$approved" -gt 0 ]; then quiet=$((quiet + 1)); [ "$quiet" -ge 2 ] && break; fi
-            else
-              quiet=0
-              for id in $ids; do
-                gh api -X POST "repos/$GH_REPO/actions/runs/$id/approve" >/dev/null
-                approved=$((approved + 1)); echo "Approved run $id"
-              done
-            fi
+            for id in $ids; do
+              gh api -X POST "repos/$GH_REPO/actions/runs/$id/approve" >/dev/null
+              approved=$((approved + 1)); echo "Approved run $id"
+            done
             sleep 10
           done
           echo "Approved ${approved} run(s) on release PR(s) $(echo $nums | sed 's/[^ ]*/#&/g')." | tee -a "$GITHUB_STEP_SUMMARY"
