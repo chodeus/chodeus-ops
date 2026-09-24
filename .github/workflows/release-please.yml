@@ -71,7 +71,7 @@ jobs:
           shas=""
           for n in $nums; do shas="$shas $(gh api "repos/$GH_REPO/pulls/$n" --jq .head.sha)"; done
           approved=0
-          for _ in $(seq 1 12); do
+          for i in $(seq 0 12); do
             ids=""
             for sha in $shas; do
               ids="$ids $(gh api --paginate "repos/$GH_REPO/actions/runs?head_sha=$sha&status=action_required&event=pull_request" --jq '.workflow_runs[].id')"
@@ -83,6 +83,6 @@ jobs:
                 echo "::warning::Could not approve run $id; it may already be approved."
               fi
             done
-            sleep 10
+            [ "$i" -lt 12 ] && sleep 10
           done
           echo "Approved ${approved} run(s) on release PR(s) $(echo $nums | sed 's/[^ ]*/#&/g')." | tee -a "$GITHUB_STEP_SUMMARY"
