@@ -59,6 +59,8 @@ jobs:
       # Runs can appear seconds apart, so poll the full 2 minutes and approve each as it appears.
       - name: Approve the release PRs' CI runs
         if: ${{ steps.release.outputs.prs_created == 'true' }}
+        # Best-effort: a failure here must not fail the release job, which gates the image publish.
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -72,11 +74,14 @@ jobs:
           for _ in $(seq 1 12); do
             ids=""
             for sha in $shas; do
-              ids="$ids $(gh api --paginate "repos/$GH_REPO/actions/runs?head_sha=$sha&status=action_required" --jq '.workflow_runs[].id')"
+              ids="$ids $(gh api --paginate "repos/$GH_REPO/actions/runs?head_sha=$sha&status=action_required&event=pull_request" --jq '.workflow_runs[].id')"
             done
             for id in $ids; do
-              gh api -X POST "repos/$GH_REPO/actions/runs/$id/approve" >/dev/null
-              approved=$((approved + 1)); echo "Approved run $id"
+              if gh api -X POST "repos/$GH_REPO/actions/runs/$id/approve" >/dev/null; then
+                approved=$((approved + 1)); echo "Approved run $id"
+              else
+                echo "::warning::Could not approve run $id; it may already be approved."
+              fi
             done
             sleep 10
           done
