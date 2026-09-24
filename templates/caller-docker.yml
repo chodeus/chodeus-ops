@@ -1,5 +1,5 @@
 # Drop into .github/workflows/docker-publish.yml of a Docker repo.
-# Calls the reusable build workflow in chodeus-ops; Discord notifications via secrets: inherit.
+# Builds, scans and smoke-tests on every PR; pushes to GHCR on main, v* tags and dispatch.
 
 name: Docker build & publish
 
@@ -10,26 +10,35 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
-    # Pin the reusable to an immutable SHA, not @main: a single commit to
-    # chodeus-ops main would otherwise execute in every consumer repo with its
-    # secrets + write token. Renovate keeps this SHA current with a review PR.
-    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@69da92834f50ecc5e040c89699775bbbdca2381c # pinned (smoke gate, native arm64 legs)
+    # The union of what docker-build's jobs declare; GitHub checks it at startup,
+    # even for the push job a PR run skips.
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    # Pin to an immutable SHA and roll it by hand: Renovate is disabled for
+    # chodeus-ops pins, and @main would run every new commit with a write token.
+    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@96cf0be225f5bd5fd4774ea539d9789dd316443e # main
     with:
-      # dockerfile_path: deploy/docker/Dockerfile   # uncomment for chub
-      # build_context: deploy/docker                # uncomment for chub
+      # dockerfile_path: deploy/docker/Dockerfile   # when the Dockerfile is not at the root
+      # build_context: deploy/docker
       push: ${{ github.event_name != 'pull_request' }}
       # Wait for the image's own HEALTHCHECK on every platform before pushing.
       smoke_healthcheck: true
-    secrets: inherit
 
   notify:
     if: always() && github.event_name != 'pull_request'
     needs: build
-    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@69da92834f50ecc5e040c89699775bbbdca2381c # pinned, same commit as docker-build
+    permissions: {}
+    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@96cf0be225f5bd5fd4774ea539d9789dd316443e # main
     with:
       event_type: build
       status: ${{ needs.build.result == 'success' && 'success' || 'failure' }}
       commit_sha: ${{ github.sha }}
-    secrets: inherit
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
