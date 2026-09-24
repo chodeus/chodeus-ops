@@ -17,6 +17,6 @@ permissions:
 
 jobs:
   release:
-    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@1fcf653ea7ccc8c3cc5b8897d38c4b3f640010c0 # main
+    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@2168813abeff4bb0c509151c538167561176bf41 # chodeus-ops#36
     # with:
     #   automerge: true   # release PRs merge themselves; needs "Allow auto-merge" and required checks that always report
