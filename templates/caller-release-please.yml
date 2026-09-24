@@ -17,4 +17,6 @@ permissions:
 
 jobs:
   release:
-    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@1fcf653ea7ccc8c3cc5b8897d38c4b3f640010c0 # main
+    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@3feceb64be058274dca33d55eb5d3a5e0c1a6c19 # chodeus-ops#36
+    # with:
+    #   automerge: true   # also add a schedule trigger; needs required checks that always report on PRs
