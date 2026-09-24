@@ -12,8 +12,9 @@ permissions:
 
 jobs:
   stale:
-    # What stale-issues.yml declares: it labels and closes issues and PRs.
+    # What stale-issues.yml declares: it labels and closes issues and PRs, and replaces its state cache.
     permissions:
       issues: write
       pull-requests: write
-    uses: chodeus/chodeus-ops/.github/workflows/stale-issues.yml@b99e2de33ae9b77ee53dbc1c2d35f7eb79b88181 # main
+      actions: write
+    uses: chodeus/chodeus-ops/.github/workflows/stale-issues.yml@a2fa669b66391d20ccc1bc9a1257b3ed30afef43 # chodeus-ops#32
