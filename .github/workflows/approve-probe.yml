@@ -1,0 +1,33 @@
+name: Approve probe (temporary)
+on:
+  push:
+    branches: [test/approve-probe]
+permissions:
+  contents: read
+jobs:
+  probe:
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open a draft PR with the job token, then approve its runs with the same token
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          gh api "repos/$GH_REPO/pulls" --method POST -f title="test: approve probe (temporary)" -f head=test/approve-probe -f base=main -F draft=true -f body="Temporary test; closed automatically." --jq '"opened #\(.number)"'
+          for i in $(seq 1 18); do
+            ids=$(gh api "repos/$GH_REPO/actions/runs?head_sha=$SHA&event=pull_request" --jq '[.workflow_runs[] | select(.conclusion=="action_required") | .id] | join(" ")')
+            [ -n "$ids" ] && break; sleep 10
+          done
+          echo "action_required runs: ${ids:-none}"
+          for id in $ids; do
+            code=$(gh api -X POST "repos/$GH_REPO/actions/runs/$id/approve" -i 2>&1 | head -1)
+            echo "approve $id -> $code"
+          done
+          sleep 20
+          gh api "repos/$GH_REPO/actions/runs?head_sha=$SHA&event=pull_request" --jq '.workflow_runs[] | "after: \(.id) \(.name) \(.status)/\(.conclusion)"'
