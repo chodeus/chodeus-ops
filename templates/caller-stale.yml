@@ -7,6 +7,13 @@ on:
     - cron: '0 5 * * *'  # daily
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   stale:
-    uses: chodeus/chodeus-ops/.github/workflows/stale-issues.yml@main
+    # What stale-issues.yml declares: it labels and closes issues and PRs.
+    permissions:
+      issues: write
+      pull-requests: write
+    uses: chodeus/chodeus-ops/.github/workflows/stale-issues.yml@b99e2de33ae9b77ee53dbc1c2d35f7eb79b88181 # main

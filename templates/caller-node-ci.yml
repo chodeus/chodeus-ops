@@ -14,9 +14,14 @@ on:
     paths:
       - 'frontend/**'
 
+permissions:
+  contents: read
+
 jobs:
   frontend-lint:
-    uses: chodeus/chodeus-ops/.github/workflows/node-ci.yml@main
+    permissions:
+      contents: read
+    uses: chodeus/chodeus-ops/.github/workflows/node-ci.yml@b99e2de33ae9b77ee53dbc1c2d35f7eb79b88181 # main
     with:
       node_version: '20'
       package_json_dir: frontend

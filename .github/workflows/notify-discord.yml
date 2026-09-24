@@ -138,6 +138,10 @@ jobs:
               print("dry_run: would POST the following payload:")
               print(json.dumps(payload, indent=2))
               sys.exit(0)
+          if not os.environ.get("WEBHOOK"):
+              # Same as repo-events: a repo without the secret, or a fork PR, skips instead of failing.
+              print("DISCORD_WEBHOOK_URL not set; skipping notify.")
+              sys.exit(0)
           req = urllib.request.Request(
               os.environ["WEBHOOK"],
               data=json.dumps(payload).encode(),

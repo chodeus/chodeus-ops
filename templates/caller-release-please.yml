@@ -1,5 +1,6 @@
 # Drop into .github/workflows/release-please.yml of any Docker repo.
-# Also requires release-please-config.json, .release-please-manifest.json, and VERSION at repo root.
+# Also requires release-please-config.json, .release-please-manifest.json, and VERSION at repo root,
+# and Settings > Actions > "Allow GitHub Actions to create and approve pull requests" enabled.
 
 name: Release Please
 
@@ -14,4 +15,4 @@ permissions:
 
 jobs:
   release:
-    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@main
+    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@b99e2de33ae9b77ee53dbc1c2d35f7eb79b88181 # main

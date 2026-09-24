@@ -14,7 +14,12 @@ on:
   discussion:
     types: [created]
 
+permissions:
+  contents: read
+
 jobs:
   notify:
-    uses: chodeus/chodeus-ops/.github/workflows/repo-events.yml@main
-    secrets: inherit
+    permissions: {}
+    uses: chodeus/chodeus-ops/.github/workflows/repo-events.yml@b99e2de33ae9b77ee53dbc1c2d35f7eb79b88181 # main
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

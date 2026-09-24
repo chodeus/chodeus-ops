@@ -8,8 +8,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   ci:
-    uses: chodeus/chodeus-ops/.github/workflows/python-ci.yml@main
+    permissions:
+      contents: read
+    uses: chodeus/chodeus-ops/.github/workflows/python-ci.yml@b99e2de33ae9b77ee53dbc1c2d35f7eb79b88181 # main
     with:
       python_versions: '["3.12"]'
