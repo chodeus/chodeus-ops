@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'auto = decide from the pushed commit; pr = refresh the release PR; release = cut a release from this branch'
+        description: 'auto = cut a release if a merged release PR has none yet, else refresh the release PR; pr = refresh the release PR; release = cut a release from this branch'
         type: choice
         options: [auto, pr, release]
         default: auto
