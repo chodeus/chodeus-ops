@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Cut a release on the current channel branch: stamp, render, build, commit, tag, GitHub release, verify.
-# Env: CHANNEL BASE PLG CHANGELOG OPS GIT_USER GIT_EMAIL TZ DRY_RUN GH_TOKEN [PR_NUMBER] [BUILD_CMD]
+# Env: CHANNEL BASE STABLE_BRANCH PLG CHANGELOG OPS GIT_USER GIT_EMAIL TZ DRY_RUN GH_TOKEN [PR_NUMBER] [BUILD_CMD]
 set -euo pipefail
 
-: "${CHANNEL:?}" "${BASE:?}" "${PLG:?}" "${CHANGELOG:?}" "${OPS:?}" "${GIT_USER:?}" "${GIT_EMAIL:?}" "${TZ:?}"
+: "${CHANNEL:?}" "${BASE:?}" "${STABLE_BRANCH:?}" "${PLG:?}" "${CHANGELOG:?}" "${OPS:?}" "${GIT_USER:?}" "${GIT_EMAIL:?}" "${TZ:?}"
 DRY_RUN="${DRY_RUN:-false}"
 PR_NUMBER="${PR_NUMBER:-}"
 read -ra BUILD <<< "${BUILD_CMD:-bash pkg_build.sh}"
@@ -12,6 +12,7 @@ PLGR="python3 $OPS/plg_release.py"
 . "$OPS/plg_release_git.sh"
 plg_git_setup
 git fetch --tags --force origin
+git fetch --no-tags origin "+refs/heads/$STABLE_BRANCH:refs/remotes/origin/$STABLE_BRANCH"
 
 version=$($PLGR next-version --channel "$CHANNEL" --tz "$TZ")
 echo "release version: $version"
@@ -40,30 +41,40 @@ mapfile -t txz < <(find dist -maxdepth 1 -name '*.txz' -type f)
 xmllint --noout "$PLG"
 $PLGR check --changelog "$CHANGELOG" --plg "$PLG" --channel "$CHANNEL" --branch "$BASE"
 
-# Stable releases name the release before them and how to go back to it. Installing a lower version
+# Each release names the one before it on its channel and how to go back to it. Installing a lower version
 # needs "forced"; removing the plugin first would delete its settings (both remove scripts rm -rf them).
 rollback_footer() {
-  local prev cmd path
+  local pre=false prev url cmd
+  [ "$CHANNEL" = stable ] || pre=true
   # a failed lookup must stop the release, not ship it without this note: set -e does not reach into $( )
-  prev=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // empty') \
+  prev=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 --json tagName,isPrerelease \
+      --jq '[.[] | select(.isPrerelease == '"$pre"' and (.tagName | test("^v[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}(\\.[0-9]+)?$")))][0].tagName // empty') \
     || { echo "could not list releases for the rollback note" >&2; return 1; }
-  [ -n "$prev" ] || return 0
-  # the manifest as released, pinned to its tag (its package URL is that release's own asset); the tag and path are
-  # percent-encoded for the URL (git allows # ; $ in tag names) and %q keeps the pasted command one argument
-  path=$(python3 -c 'import sys, urllib.parse as u; print("/".join(u.quote(a, safe="/") for a in sys.argv[1:]))' "$prev" "$PLG") \
-    || return 1
-  printf -v cmd 'plugin install %q forced' "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$path"
-  printf '%s\n' "" "Rollback to $prev if this release breaks something for you. In a terminal on the server, this goes back and keeps your settings:" '```' "$cmd" '```' "Removing the plugin first would delete its settings. If Auto Update Applications covers this plugin, switch it off for it until the fix is out, or it will update again."
+  if [ -n "$prev" ]; then
+    # the tag goes into a URL and a pasted root command: only a release version shape may pass
+    [[ "$prev" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]] || { echo "unexpected release tag '$prev'" >&2; return 1; }
+    url="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$prev/$PLG"
+    $PLGR verify-manifest --url "$url" >/dev/null \
+      || { echo "the rollback note would point at $prev, which no longer installs" >&2; return 1; }
+    printf -v cmd 'plugin install %q forced' "$url"
+    printf '%s\n' "" "Rollback to $prev if this release breaks something for you. In a terminal on the server, this goes back and keeps your settings:" '```' "$cmd" '```'
+  fi
+  if [ "$CHANNEL" = beta ]; then
+    printf -v cmd 'plugin install %q forced' "${STABLE_PLUGIN_URL:?}"
+    printf '%s\n' "" "To leave the beta and go back to the stable release:" '```' "$cmd" '```'
+  elif [ -z "$prev" ]; then
+    return 0
+  fi
+  echo "Removing the plugin first would delete its settings. If Auto Update Applications covers this plugin, switch it off for it until the fix is out, or it will update again."
 }
 
+stable_plg=$(mktemp)
+git show "origin/$STABLE_BRANCH:$PLG" > "$stable_plg"
+STABLE_PLUGIN_URL=$($PLGR entity --plg "$stable_plg" --name pluginURL)
 notes=$(mktemp)
 plugin_url=$($PLGR entity --plg "$PLG" --name pluginURL)
-footer="Install / update URL: \`$plugin_url\`"
-if [ "$CHANNEL" = stable ]; then
-  rollback=$(rollback_footer)
-  footer+=$'\n'"$rollback"
-fi
-$PLGR notes --changelog "$CHANGELOG" --version "$version" --footer "$footer" > "$notes"
+rollback=$(rollback_footer)
+$PLGR notes --changelog "$CHANGELOG" --version "$version" --footer "Install / update URL: \`$plugin_url\`"$'\n'"$rollback" > "$notes"
 
 git add "$PLG" "$CHANGELOG"
 git commit -q -m "chore(release): v$version [skip ci]"
@@ -94,8 +105,13 @@ $PLGR check --changelog "$CHANGELOG" --plg "$PLG" --channel "$CHANNEL" --branch 
 git push -q origin "HEAD:$BASE"
 trap - ERR
 
-# The branch has done its job; left behind, its Unreleased would be carried into the next release PR.
-git push -q origin --delete "release/$CHANNEL" || echo "::warning::could not delete release/$CHANNEL"
+# The branch has done its job; left behind, its Unreleased would be carried into the next release PR. Only while it
+# is still what was merged: a refresh may have rebuilt it for a new PR since, and deleting it would close that PR.
+if [ -n "$PR_NUMBER" ]; then
+  { merged_head=$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid) \
+    && git push -q --force-with-lease="refs/heads/release/$CHANNEL:$merged_head" origin ":refs/heads/release/$CHANNEL"; } \
+    || echo "::warning::left release/$CHANNEL in place"
+fi
 
 # Non-fatal: the release is already published and verified; a failed courtesy comment must not red the run.
 if [ -n "$PR_NUMBER" ]; then
