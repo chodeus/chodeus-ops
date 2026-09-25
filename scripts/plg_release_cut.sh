@@ -47,9 +47,11 @@ rollback_footer() {
   local pre=false prev url cmd
   [ "$CHANNEL" = stable ] || pre=true
   # a failed lookup must stop the release, not ship it without this note: set -e does not reach into $( )
-  prev=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 --json tagName,isPrerelease \
-      --jq '[.[] | select(.isPrerelease == '"$pre"' and (.tagName | test("^v[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}(\\.[0-9]+)?$")))][0].tagName // empty') \
+  prev=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+      --jq '.[] | select((.draft | not) and .prerelease == '"$pre"' and (.tag_name | test("^v[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}(\\.[0-9]+)?$"))) | .tag_name') \
     || { echo "could not list releases for the rollback note" >&2; return 1; }
+  # every page, newest first: a run of betas can push the last stable release past the first
+  prev="${prev%%$'\n'*}"
   if [ -n "$prev" ]; then
     # the tag goes into a URL and a pasted root command: only a release version shape may pass
     [[ "$prev" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]] || { echo "unexpected release tag '$prev'" >&2; return 1; }
@@ -60,7 +62,9 @@ rollback_footer() {
     printf '%s\n' "" "Rollback to $prev if this release breaks something for you. In a terminal on the server, this goes back and keeps your settings:" '```' "$cmd" '```'
   fi
   if [ "$CHANNEL" = beta ]; then
-    printf -v cmd 'plugin install %q forced' "${STABLE_PLUGIN_URL:?}"
+    $PLGR verify-manifest --url "${STABLE_PLUGIN_URL:?}" >/dev/null \
+      || { echo "the way back to stable would point at $STABLE_PLUGIN_URL, which does not install" >&2; return 1; }
+    printf -v cmd 'plugin install %q forced' "$STABLE_PLUGIN_URL"
     printf '%s\n' "" "To leave the beta and go back to the stable release:" '```' "$cmd" '```'
   elif [ -z "$prev" ]; then
     return 0
