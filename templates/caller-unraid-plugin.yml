@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'auto = decide from the pushed commit; pr = refresh the release PR; release = cut a release from this branch'
+        description: 'auto = cut a release if a merged release PR has none yet, else refresh the release PR; pr = refresh the release PR; release = cut a release from this branch'
         type: choice
         options: [auto, pr, release]
         default: auto
@@ -33,6 +33,10 @@ concurrency:
 
 jobs:
   release:
+    # What the called job asks for; GitHub checks it against this grant when the run starts.
+    permissions:
+      contents: read
+      actions: write
     # Pin to a reviewed chodeus-ops commit — @main would run upstream changes with RELEASE_TOKEN.
     uses: chodeus/chodeus-ops/.github/workflows/unraid-plugin-release.yml@4d8f3ecd9b7803badffe354a689960c8866ce1fb # main
     with:

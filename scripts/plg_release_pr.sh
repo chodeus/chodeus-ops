@@ -8,6 +8,8 @@ BETA_BRANCH="${BETA_BRANCH:-}"
 DRY_RUN="${DRY_RUN:-false}"
 RB="release/$CHANNEL"
 PLGR="python3 $OPS/plg_release.py"
+SCRATCH=$(mktemp -d)
+trap 'rm -rf "$SCRATCH"' EXIT
 
 . "$OPS/plg_release_git.sh"
 plg_git_setup
@@ -18,55 +20,63 @@ git fetch --tags origin
 
 OLD_SHA=$(git rev-parse -q --verify "origin/$RB" || true)
 OLD_SYNC=""
+OLD_SYNC_BETA=""
 OLD_CL=""
 if [ -n "$OLD_SHA" ]; then
-  OLD_SYNC=$(git log -1 --format=%B "origin/$RB" | sed -n 's/^Release-Synced: //p' | head -1)
-  OLD_CL=$(mktemp)
+  # the trailers sit on this job's own commit; edits pushed to the PR since then sit on top of it
+  trailers=$(git log --format=%B "origin/$BASE..origin/$RB")
+  OLD_SYNC=$(sed -n 's/^Release-Synced: //p' <<<"$trailers" | sed -n 1p)
+  OLD_SYNC_BETA=$(sed -n 's/^Release-Synced-Beta: //p' <<<"$trailers" | sed -n 1p)
+  OLD_CL="$SCRATCH/old-changelog.md"
   git show "origin/$RB:$CHANGELOG" > "$OLD_CL" 2>/dev/null || OLD_CL=""
+  # The rebuild below carries over only the notes: stop rather than drop anything else pushed to the PR.
+  # Beta work is never an edit here, promoted by tag or merged whole by an older refresh; ^ per ref, as --not toggles.
+  not_promoted=()
+  [ -z "$BETA_BRANCH" ] || [ "$BASE" = "$BETA_BRANCH" ] || not_promoted=("^origin/$BETA_BRANCH")
+  if [ -n "$OLD_SYNC_BETA" ] && git rev-parse -q --verify "refs/tags/v$OLD_SYNC_BETA" >/dev/null; then
+    not_promoted+=("^refs/tags/v$OLD_SYNC_BETA")
+  fi
+  edited=$(git log --no-merges --format= --name-only "origin/$BASE..origin/$RB" "${not_promoted[@]}" \
+    -- . ":(top,exclude)$CHANGELOG" | sort -u)
+  if [ -n "$edited" ]; then
+    echo "::error::$RB changes more than $CHANGELOG ($(tr '\n' ' ' <<<"$edited")); a refresh rebuilds it from $BASE and would drop that. Move it to $BASE, or remove it from $RB, then push again."
+    exit 1
+  fi
 fi
 
 git switch -q -C "$RB" "origin/$BASE"
 
-# Promotion PR: merge beta into the stable channel, keeping the stable branch's manifest.
-promote=false
-if [ "$CHANNEL" = stable ] && [ -n "$BETA_BRANCH" ] && ! git merge-base --is-ancestor "origin/$BETA_BRANCH" HEAD; then
-  promote=true
-  if ! git merge --no-ff --no-commit "origin/$BETA_BRANCH" >/dev/null; then
-    while IFS= read -r -d '' f; do
-      case "$f" in
-        "$PLG") git checkout "origin/$BASE" -- "$PLG" ;;
-        "$CHANGELOG") git checkout "origin/$BASE" -- "$CHANGELOG" ;;
-        *) echo "::error::merge conflict in $f — merge $BETA_BRANCH into $BASE by hand, then push $BASE"; exit 1 ;;
-      esac
-    done < <(git diff -z --name-only --diff-filter=U)
+# Promotion PR: bring the newest beta release (its tag, never unreleased work on beta) into the stable channel.
+promote=""
+if [ "$CHANNEL" = stable ] && [ -n "$BETA_BRANCH" ] && git cat-file -e "origin/$BETA_BRANCH:$CHANGELOG" 2>/dev/null; then
+  beta_cl="$SCRATCH/beta-changelog.md"
+  git show "origin/$BETA_BRANCH:$CHANGELOG" > "$beta_cl"
+  beta_version=$($PLGR last-beta --changelog "$beta_cl")
+  if [ -n "$beta_version" ] && git rev-parse -q --verify "refs/tags/v$beta_version" >/dev/null \
+      && ! git merge-base --is-ancestor "refs/tags/v$beta_version" HEAD; then
+    promote="$beta_version"
+    . "$OPS/plg_release_merge.sh"
+    plg_merge "refs/tags/v$beta_version" stable
+    git commit -q -m "chore(release): merge v$beta_version into $BASE for the next stable"
   fi
-  git checkout "origin/$BASE" -- "$PLG"
-  theirs=$(mktemp)
-  git show "origin/$BETA_BRANCH:$CHANGELOG" > "$theirs"
-  $PLGR merge-changelog --ours "$CHANGELOG" --theirs "$theirs" --out "$CHANGELOG"
-  git add "$PLG" "$CHANGELOG"
-  git commit -q -m "chore(release): merge $BETA_BRANCH into $BASE for the next stable"
 fi
 
-# Seed: promotion PRs reuse the beta notes; everything else reads commit subjects since the last sync.
-seed_args=()
-if [ "$promote" = true ]; then
-  seed_args=(--beta-sections)
-else
-  since="$OLD_SYNC"
-  if [ -z "$since" ] || ! git merge-base --is-ancestor "$since" HEAD 2>/dev/null; then
-    last=$($PLGR last-version --changelog "$CHANGELOG" --channel "$CHANNEL")
-    if git rev-parse -q --verify "refs/tags/v$last" >/dev/null; then
-      since="v$last"
-    else
-      since=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
-    fi
+# Seed: commit subjects on the channel branch since the last sync, plus beta notes the PR has not taken yet.
+since="$OLD_SYNC"
+if [ -z "$since" ] || ! git merge-base --is-ancestor "$since" "origin/$BASE" 2>/dev/null; then
+  last=$($PLGR last-version --changelog "$CHANGELOG" --channel "$CHANNEL")
+  if git rev-parse -q --verify "refs/tags/v$last" >/dev/null; then
+    since="v$last"
+  else
+    since=$(git describe --tags --abbrev=0 --match 'v*' "origin/$BASE" 2>/dev/null || true)
   fi
-  seed_args=(--since "$since")
 fi
+seed_args=(--since "$since" --until "origin/$BASE")
+# the promoted beta's notes already describe its commits, so they are not seeded twice from the stable branch
+[ -z "$promote" ] || seed_args+=(--beta-sections --beta-after "$OLD_SYNC_BETA" --exclude "refs/tags/v$promote")
 carry=()
 [ -z "$OLD_CL" ] || carry=(--carry-from "$OLD_CL")
-$PLGR seed --changelog "$CHANGELOG" "${carry[@]}" "${seed_args[@]}"
+$PLGR seed --changelog "$CHANGELOG" --channel "$CHANNEL" "${carry[@]}" "${seed_args[@]}"
 
 # Capture first: piping straight into grep -c would turn a notes failure into "nothing to release".
 notes=$($PLGR notes --changelog "$CHANGELOG" --version Unreleased)
@@ -77,8 +87,10 @@ if [ "$count" -eq 0 ] && [ -z "$OLD_SHA" ]; then
 fi
 
 # --allow-empty: an emptied Unreleased section still has to record the Release-Synced trailer.
+sync="Release-Synced: $(git rev-parse "origin/$BASE")"
+[ -z "$promote" ] || sync+=$'\n'"Release-Synced-Beta: $promote"
 git add "$CHANGELOG"
-git commit -q --allow-empty -m "chore($BASE): release changelog" -m "Release-Synced: $(git rev-parse "origin/$BASE")"
+git commit -q --allow-empty -m "chore($BASE): release changelog" -m "$sync"
 
 if [ "$DRY_RUN" = true ]; then
   echo "::notice::dry run — would push $RB and open/update the release PR"
@@ -93,15 +105,15 @@ else
   git push -q origin "$RB"
 fi
 
-body=$(mktemp)
+body="$SCRATCH/pr-body.md"
 {
   echo "Merge this PR to cut the next **$CHANNEL** release. Edit the Unreleased section of \`$CHANGELOG\` on this branch first; the release job stamps the version, renders it into the plugin manifest, and attaches the package."
   echo
-  echo "Raw seed bullets (\`- fix: ...\`, or a subject ending in a commit sha) must be rewritten before a stable release."
+  echo "Raw seed bullets (\`- fix: ...\`, or a subject ending in a commit sha) must be rewritten before a stable release. Change only \`$CHANGELOG\` here: a refresh keeps your note edits and stops rather than drop anything else."
   echo
   # generated PR: the release check enforces the changelog rules, so keep CodeRabbit off it
   echo "@coderabbitai ignore"
-  [ "$promote" = false ] || echo "This PR also merges \`$BETA_BRANCH\` into \`$BASE\` — merge it with a merge commit, not a squash."
+  [ -z "$promote" ] || echo "This PR also brings beta release \`v$promote\` into \`$BASE\` — merge it with a merge commit, not a squash."
   echo
   echo "## Unreleased"
   echo
