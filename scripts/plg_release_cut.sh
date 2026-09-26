@@ -46,7 +46,7 @@ $PLGR check --changelog "$CHANGELOG" --plg "$PLG" --channel "$CHANNEL" --branch 
 # Each release names the one before it on its channel and how to go back to it. Installing a lower version
 # needs "forced"; removing the plugin first would delete its settings (both remove scripts rm -rf them).
 rollback_footer() {
-  local pre=false prev url cmd
+  local pre=false prev path url cmd
   [ "$CHANNEL" = stable ] || pre=true
   # a failed lookup must stop the release, not ship it without this note: set -e does not reach into $( )
   prev=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
@@ -57,7 +57,9 @@ rollback_footer() {
   if [ -n "$prev" ]; then
     # the tag goes into a URL and a pasted root command: only a release version shape may pass
     [[ "$prev" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]] || { echo "unexpected release tag '$prev'" >&2; return 1; }
-    url="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$prev/$PLG"
+    # a # or ? in the manifest path must stay part of the path
+    path=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$PLG") || return 1
+    url="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$prev/$path"
     $PLGR verify-manifest --url "$url" >/dev/null \
       || { echo "the rollback note would point at $prev, which no longer installs" >&2; return 1; }
     printf -v cmd 'plugin install %q forced' "$url"

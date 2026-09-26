@@ -522,7 +522,8 @@ RELEASES = ('[{"tag_name":"v2026.09.21","prerelease":false,"draft":true},'
             '{"tag_name":"v2026.09.07","prerelease":false,"draft":false}]')
 
 
-def _rollback_footer(tmp_path, gh_body, channel="stable", plgr_body="echo verified", call="rollback_footer"):
+def _rollback_footer(tmp_path, gh_body, channel="stable", plgr_body="echo verified", call="rollback_footer",
+                     plg="plugin.plg"):
     """Run rollback_footer from plg_release_cut.sh against a stub gh and a stub release helper."""
     body = (SCRIPTS / "plg_release_cut.sh").read_text()
     fn = re.search(r"^rollback_footer\(\) \{.*?^\}", body, re.M | re.S).group(0)
@@ -532,7 +533,7 @@ def _rollback_footer(tmp_path, gh_body, channel="stable", plgr_body="echo verifi
         (bindir / name).write_text("#!/bin/bash\n" + text + "\n")
         (bindir / name).chmod(0o755)
     env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "GITHUB_REPOSITORY": "chodeus/plugin",
-           "PLG": "plugin.plg", "CHANNEL": channel, "PLGR": str(bindir / "plgr"),
+           "PLG": plg, "CHANNEL": channel, "PLGR": str(bindir / "plgr"),
            "STABLE_PLUGIN_URL": "https://raw.githubusercontent.com/chodeus/plugin/main/plugin.plg"}
     return subprocess.run(["bash", "-c", f"set -euo pipefail\n{fn}\n{call}"], cwd=tmp_path, env=env,
                           capture_output=True, text=True)
@@ -576,6 +577,15 @@ def test_rollback_note_finds_the_previous_release_past_the_first_page(tmp_path):
     r = _rollback_footer(tmp_path, _gh_listing(betas, RELEASES))
     assert r.returncode == 0, r.stderr
     assert "plugin install https://raw.githubusercontent.com/chodeus/plugin/v2026.09.19/plugin.plg forced" in r.stdout.splitlines()
+
+
+def test_rollback_note_percent_encodes_the_manifest_path(tmp_path):
+    """A # or ? in the manifest path stays part of the path instead of starting a fragment or a query."""
+    r = _rollback_footer(tmp_path, _gh_listing(), plg="plugins/my #1?.plg", plgr_body='echo "$*" >> verified; echo ok')
+    assert r.returncode == 0, r.stderr
+    url = "https://raw.githubusercontent.com/chodeus/plugin/v2026.09.19/plugins/my%20%231%3F.plg"
+    assert f"plugin install {url} forced" in r.stdout.splitlines()
+    assert f"--url {url}" in (tmp_path / "verified").read_text()
 
 
 def test_no_rollback_note_before_the_first_stable_release(tmp_path):
