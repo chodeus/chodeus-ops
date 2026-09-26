@@ -77,6 +77,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: repo
+          # The branch tip, not the event commit: a queued or re-run job's commit can be behind the branch it pushes to.
+          ref: ${{ github.ref }}
           fetch-depth: 0
           token: ${{ secrets.RELEASE_TOKEN }}
           # The scripts attach the token to origin themselves, around the pushes that need
@@ -92,13 +94,14 @@ jobs:
           wf="${wf%@*}"
           # Anchor on the uses: key so a commented-out line cannot win, then take the
           # whole value up to a quote, space or comment so refs like a/b+c stay intact.
-          line=$(grep -E "^[[:space:]]*uses:[[:space:]]*['\"]?chodeus/chodeus-ops/\.github/workflows/unraid-plugin-release\.yml@" "repo/$wf" | head -1 || true)
+          # Read at the commit this run started from: the checkout is the branch tip, which may pin another ref.
+          line=$(git -C repo show "$GITHUB_SHA:$wf" | grep -E "^[[:space:]]*uses:[[:space:]]*['\"]?chodeus/chodeus-ops/\.github/workflows/unraid-plugin-release\.yml@" | head -1 || true)
           ref="${line##*@}"
           ref="${ref%%[\"\'[:space:]]*}"
           ref="${ref%%#*}"
           # Fail rather than fall back: an unpinned guess would run unreviewed scripts with RELEASE_TOKEN.
           if [ -z "$ref" ]; then
-            echo "::error::could not read the chodeus-ops ref from repo/$wf — the caller must name this workflow directly in a uses: line"
+            echo "::error::could not read the chodeus-ops ref from $wf at $GITHUB_SHA — the caller must name this workflow directly in a uses: line"
             exit 1
           fi
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
@@ -164,20 +167,23 @@ jobs:
             pr=$(due "$ch" "$GITHUB_REF_NAME" HEAD)
             if [ -n "$pr" ]; then mode="release"; else mode="pr"; fi
           fi
+          # A release run skips refreshing the other channel's PR while that channel's merged release waits for its cut.
+          other_pr=""
+          if [ -n "$other" ] && { [ "$mode" = release ] || [ "${GITHUB_EVENT_NAME:-}" = push ]; }; then
+            other_pr=$(due "$other" "$other_branch" "origin/$other_branch")
+          fi
           # Both branches share one queue, so this push may have cancelled the other channel's waiting release: start it
           # again. Only from pushes, so two stuck channels cannot keep starting runs for each other; never from a dry run.
-          if [ -n "$other" ] && [ "${GITHUB_EVENT_NAME:-}" = push ] && [ "$DRY_RUN" != true ]; then
-            other_pr=$(due "$other" "$other_branch" "origin/$other_branch")
-            if [ -n "$other_pr" ]; then
-              caller="${GITHUB_WORKFLOW_REF%@*}"
-              GH_TOKEN="$DISPATCH_TOKEN" gh workflow run "${caller##*/}" --repo "$GITHUB_REPOSITORY" --ref "$other_branch" -f mode=auto
-              echo "::notice::#$other_pr is merged into $other_branch without a release yet: started a Release run for it"
-            fi
+          if [ -n "$other_pr" ] && [ "${GITHUB_EVENT_NAME:-}" = push ] && [ "$DRY_RUN" != true ]; then
+            caller="${GITHUB_WORKFLOW_REF%@*}"
+            GH_TOKEN="$DISPATCH_TOKEN" gh workflow run "${caller##*/}" --repo "$GITHUB_REPOSITORY" --ref "$other_branch" -f mode=auto
+            echo "::notice::#$other_pr is merged into $other_branch without a release yet: started a Release run for it"
           fi
           {
             echo "channel=$ch"
             echo "mode=$mode"
             echo "pr_number=$pr"
+            echo "other_pr=$other_pr"
           } >> "$GITHUB_OUTPUT"
           echo "channel=$ch mode=$mode pr=${pr:-none}"
 
@@ -207,9 +213,10 @@ jobs:
           TZ: ${{ inputs.tz }}
         run: bash "$OPS/plg_release_cut.sh"
 
-      # A beta release changes what the next stable will contain.
+      # A beta release changes what the next stable will contain. A merged stable release still waiting for its cut
+      # would be rebuilt into a new PR, so its own run refreshes instead.
       - name: Refresh stable release PR after a beta
-        if: steps.decide.outputs.mode == 'release' && steps.decide.outputs.channel == 'beta'
+        if: steps.decide.outputs.mode == 'release' && steps.decide.outputs.channel == 'beta' && steps.decide.outputs.other_pr == ''
         working-directory: repo
         env:
           CHANNEL: stable
@@ -227,8 +234,9 @@ jobs:
           VERSION: ${{ steps.cut.outputs.version }}
         run: bash "$OPS/plg_release_backmerge.sh"
 
+      # Likewise skipped while a merged beta release waits for its cut.
       - name: Refresh beta release PR after a stable
-        if: steps.decide.outputs.mode == 'release' && steps.decide.outputs.channel == 'stable' && inputs.beta_branch != ''
+        if: steps.decide.outputs.mode == 'release' && steps.decide.outputs.channel == 'stable' && inputs.beta_branch != '' && steps.decide.outputs.other_pr == ''
         working-directory: repo
         env:
           CHANNEL: beta

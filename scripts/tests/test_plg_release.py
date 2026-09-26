@@ -197,19 +197,26 @@ grep -c 'SEKRIT' .git/config >> "$3" || true   # after: reattached for the push
 USES = "chodeus/chodeus-ops/.github/workflows/unraid-plugin-release.yml"
 
 
-def _resolve_ops_ref(tmp_path, caller_yaml):
-    """Run the workflow's own 'Resolve release-scripts ref' script against a caller file."""
+def _resolve_ops_ref(tmp_path, caller_yaml, later=None):
+    """Run the workflow's own 'Resolve release-scripts ref' script against the caller file at the run's commit."""
     import yaml
 
     wf = yaml.safe_load((SCRIPTS.parent / ".github/workflows/unraid-plugin-release.yml").read_text())
     step = next(s for s in wf["jobs"]["release"]["steps"] if s.get("id") == "opsref")
-    caller = tmp_path / "repo/.github/workflows/release.yml"
+    repo = tmp_path / "repo"
+    caller = repo / ".github/workflows/release.yml"
     caller.parent.mkdir(parents=True)
-    caller.write_text(caller_yaml)
+    _git(repo, "init", "-q", "-b", "main")
+    shas = []
+    for text in [caller_yaml] + ([later] if later else []):
+        caller.write_text(text)
+        _git(repo, "add", "-A")
+        _git(repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "caller")
+        shas.append(_git(repo, "rev-parse", "HEAD"))
     out = tmp_path / "out.txt"
     out.touch()
     env = {**os.environ, "GITHUB_WORKFLOW_REF": "chodeus/plugin/.github/workflows/release.yml@refs/heads/main",
-           "GITHUB_OUTPUT": str(out)}
+           "GITHUB_OUTPUT": str(out), "GITHUB_SHA": shas[0]}
     subprocess.run(["bash", "-c", step["run"]], cwd=tmp_path, env=env, check=True, capture_output=True)
     return re.search(r"ref=(.*)", out.read_text()).group(1)
 
@@ -238,28 +245,55 @@ def test_ops_ref_ignores_a_commented_out_uses_line(tmp_path):
     assert _resolve_ops_ref(tmp_path, caller) == "live111"
 
 
-def _run_decide(mode, ref_name="main"):
-    """Run the workflow's 'Decide channel and mode' step with the given inputs."""
+def test_ops_ref_is_read_where_the_run_started_not_at_the_branch_tip(tmp_path):
+    """GitHub ran the workflow as pinned at the event commit; a pin bump on the branch since must not swap its scripts."""
+    started = f"jobs:\n  release:\n    uses: {USES}@old1111\n"
+    assert _resolve_ops_ref(tmp_path, started, later=started.replace("old1111", "new2222")) == "old1111"
+
+
+def _release_steps():
+    import yaml
+
+    wf = yaml.safe_load((SCRIPTS.parent / ".github/workflows/unraid-plugin-release.yml").read_text())
+    return {s.get("name"): s for s in wf["jobs"]["release"]["steps"]}
+
+
+def test_the_release_job_works_from_the_branch_tip():
+    """A queued or re-run job's event commit can be behind its branch, and a cut from it cannot push."""
+    assert _release_steps()["Checkout plugin repo"]["with"]["ref"] == "${{ github.ref }}"
+
+
+def test_cross_channel_refreshes_wait_for_the_other_channels_merged_release():
+    """A refresh while that channel's merged release awaits its cut would reopen the released notes as a new PR."""
+    steps = _release_steps()
+    for name in ("Refresh stable release PR after a beta", "Refresh beta release PR after a stable"):
+        assert "steps.decide.outputs.other_pr == ''" in steps[name]["if"], name
+
+
+def _run_decide(tmp_path, mode, ref_name="main"):
+    """Run the workflow's 'Decide channel and mode' step with the given inputs; no release PR is merged."""
     import yaml
 
     wf = yaml.safe_load((SCRIPTS.parent / ".github/workflows/unraid-plugin-release.yml").read_text())
     step = next(s for s in wf["jobs"]["release"]["steps"] if s.get("id") == "decide")
-    env = {**os.environ, "STABLE": "main", "BETA": "beta", "MODE_IN": mode,
+    (tmp_path / "gh").write_text("#!/bin/bash\necho ' '\n")
+    (tmp_path / "gh").chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "STABLE": "main", "BETA": "beta", "MODE_IN": mode,
            "GITHUB_REF_NAME": ref_name, "GITHUB_OUTPUT": "/dev/null",
            "GITHUB_REPOSITORY": "chodeus/plugin", "GITHUB_SHA": "deadbeef"}
     return subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True)
 
 
 @pytest.mark.parametrize("mode", ["relase", "", "RELEASE", "release; rm -rf /"])
-def test_decide_rejects_an_unsupported_mode(mode):
-    r = _run_decide(mode)
+def test_decide_rejects_an_unsupported_mode(tmp_path, mode):
+    r = _run_decide(tmp_path, mode)
     assert r.returncode == 1, r.stdout
     assert "mode must be auto, pr or release" in r.stdout + r.stderr
 
 
 @pytest.mark.parametrize("mode", ["pr", "release"])
-def test_decide_accepts_the_supported_modes(mode):
-    assert _run_decide(mode).returncode == 0
+def test_decide_accepts_the_supported_modes(tmp_path, mode):
+    assert _run_decide(tmp_path, mode).returncode == 0
 
 
 def test_stamp_rejects_a_version_the_parser_would_not_accept(tmp_path):
@@ -772,13 +806,14 @@ def test_decide_restarts_the_other_channels_waiting_release(tmp_path, decide_rep
           '  *"workflow run"*) echo "$GH_TOKEN $*" >> dispatched ;;\nesac')
     r, out = _run_decide_state(tmp_path, repo, gh, event="push")
     assert r.returncode == 0, r.stderr
-    assert out["mode"] == "pr"
+    assert (out["mode"], out["other_pr"]) == ("pr", "9")
     dispatched = (repo / "dispatched").read_text()
     assert dispatched.startswith("dispatch-token workflow run release.yml") and "--ref beta" in dispatched
     (repo / "dispatched").unlink()
-    _run_decide_state(tmp_path, repo, gh, event="workflow_dispatch")
+    out = _run_decide_state(tmp_path, repo, gh, mode="release", event="workflow_dispatch")[1]
+    assert out["other_pr"] == "9", "a release run still learns the other channel is waiting"
     assert not (repo / "dispatched").exists(), "a started run never starts another"
-    _run_decide_state(tmp_path, repo, gh, event="push", beta="")
+    assert _run_decide_state(tmp_path, repo, gh, event="push", beta="")[1]["other_pr"] == ""
     assert not (repo / "dispatched").exists(), "a single-channel plugin has no other channel"
     _run_decide_state(tmp_path, repo, gh, event="push", dry_run="true")
     assert not (repo / "dispatched").exists(), "a dry run never starts a release"
@@ -976,6 +1011,26 @@ def test_installer_changes_cross_between_the_channels(channels):
     assert channels.check("beta", "beta", "beta") == 0
 
 
+def test_release_scripts_leave_no_temporary_files(channels):
+    """Each script keeps its files in one scratch directory and removes it when it exits."""
+    scratch = channels.tmp / "scratch"
+    scratch.mkdir()
+    channels.release("beta", "2026.09.21.1", "- Beta notes", "beta")
+    channels.run("plg_release_pr.sh", CHANNEL="stable", BASE="main", TMPDIR=str(scratch))
+    channels.sh(channels.user, "fetch", "-q", "origin")
+    assert "merge v2026.09.21.1 into main" in channels.sh(channels.user, "log", "--format=%s", "origin/main..origin/release/stable")
+    channels.release("main", "2026.09.22", "- Stable notes", "stable")
+    channels.run("plg_release_backmerge.sh", BASE="main", VERSION="2026.09.22", TMPDIR=str(scratch))
+    assert list(scratch.iterdir()) == []
+
+
+@pytest.mark.parametrize("script", ["plg_release_pr.sh", "plg_release_cut.sh", "plg_release_backmerge.sh"])
+def test_every_release_script_removes_its_scratch_directory(script):
+    body = (SCRIPTS / script).read_text()
+    assert "SCRATCH=$(mktemp -d)\ntrap 'rm -rf \"$SCRATCH\"' EXIT\n" in body
+    assert body.count("mktemp") == 1, "temporary files go in $SCRATCH"
+
+
 def test_beta_pr_edits_survive_a_refresh(channels):
     channels.commit("beta", "fix: A thing")
     channels.commit("beta", "Plain subject B")
@@ -1033,7 +1088,7 @@ def test_merge_stops_when_git_refuses_to_merge(tmp_path):
     _git(repo, "switch", "-q", "main")
     (repo / "x").write_text("untracked, in the way")
     script = f'''set -euo pipefail
-PLG=p.plg CHANGELOG=CHANGELOG.md PLGR="python3 {SCRIPTS}/plg_release.py"
+PLG=p.plg CHANGELOG=CHANGELOG.md PLGR="python3 {SCRIPTS}/plg_release.py" SCRATCH="{tmp_path}"
 . "{SCRIPTS}/plg_release_merge.sh"
 plg_merge other stable
 '''
