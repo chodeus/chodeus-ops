@@ -272,6 +272,8 @@ jobs:
           ignore-unfixed: ${{ inputs.trivy_ignore_unfixed }}
           exit-code: '1'
           format: sarif
+          # Without it the action drops `severity` for SARIF, so any fixable finding failed the gate
+          limit-severities-for-sarif: true
           output: trivy-image.sarif
           # The report step above already installed trivy in this job.
           skip-setup-trivy: true
