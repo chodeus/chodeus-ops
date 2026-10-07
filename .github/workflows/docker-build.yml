@@ -314,6 +314,29 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Concurrency only orders runs of one workflow. A build from another one (a release job)
+      # can finish after a newer commit's, so the branch tag and latest stay with the newest commit.
+      - name: Check the branch head
+        id: head
+        env:
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          latest='{{is_default_branch}}'; branch=true
+          if [[ "$REF" == refs/heads/* ]]; then
+            if ! head=$(git ls-remote --exit-code origin "$REF" | cut -f1); then
+              echo "::error::Could not read ${REF#refs/heads/} from origin, so nothing is published."
+              exit 1
+            fi
+            if [ "$head" != "$SHA" ]; then
+              latest=false; branch=false
+              echo "::warning::${REF#refs/heads/} has moved on to ${head:0:7}, so this build of ${SHA:0:7} skips its branch tag and latest."
+            fi
+          fi
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
       - name: Compute tags
         id: meta
         uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
@@ -323,12 +346,12 @@ jobs:
           # default also adds it for any semver tag, including one on an older commit.
           flavor: ${{ inputs.tag_suffix != '' && format('latest=false,suffix={0},onlatest=true', inputs.tag_suffix) || 'latest=false' }}
           tags: |
-            type=ref,event=branch
+            type=ref,event=branch,enable=${{ steps.head.outputs.branch }}
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ steps.head.outputs.latest }}
             type=semver,pattern={{version}},value=${{ inputs.release_version }},enable=${{ inputs.release_version != '' }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.release_version }},enable=${{ inputs.release_version != '' }}
 
