@@ -319,8 +319,9 @@ jobs:
         uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
         with:
           images: ${{ needs.plan.outputs.image }}
-          # Empty suffix yields an empty flavor, which is the action's default.
-          flavor: ${{ inputs.tag_suffix != '' && format('suffix={0},onlatest=true', inputs.tag_suffix) || '' }}
+          # latest=false leaves latest to the default-branch rule below; the action's
+          # default also adds it for any semver tag, including one on an older commit.
+          flavor: ${{ inputs.tag_suffix != '' && format('latest=false,suffix={0},onlatest=true', inputs.tag_suffix) || 'latest=false' }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr

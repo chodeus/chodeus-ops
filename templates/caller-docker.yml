@@ -13,6 +13,11 @@ on:
 permissions:
   contents: read
 
+# A newer push must publish last, so pushes and dispatches queue per ref; a PR's superseded run is dropped
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     # The union of what docker-build's jobs declare; GitHub checks it at startup,
