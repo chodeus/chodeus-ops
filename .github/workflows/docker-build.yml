@@ -289,6 +289,11 @@ jobs:
     # Only exists when actually publishing, so a verification run never holds a
     # token with packages: write. Every platform is already built in scan.
     if: ${{ inputs.push }}
+    # One publish per image and ref at a time, whichever workflow calls this. queue: max keeps every
+    # waiting run, where the default replaces a pending one and would drop a release build.
+    concurrency:
+      group: docker-publish-${{ needs.plan.outputs.image }}${{ inputs.tag_suffix }}-${{ github.ref }}
+      queue: max
     # contents: checkout. packages: the GHCR login and push.
     permissions:
       contents: read
@@ -314,20 +319,44 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Inside the publish queue: a newer commit's build has already published or waits for this one.
+      # Once the branch has moved past this commit, its branch tag and latest are the newer build's.
+      - name: Check the branch head
+        id: head
+        env:
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          latest='{{is_default_branch}}'; branch=true
+          if [[ "$REF" == refs/heads/* ]]; then
+            if ! head=$(git ls-remote --exit-code origin "$REF" | cut -f1); then
+              echo "::error::Could not read ${REF#refs/heads/} from origin, so nothing is published."
+              exit 1
+            fi
+            if [ "$head" != "$SHA" ]; then
+              latest=false; branch=false
+              echo "::warning::${REF#refs/heads/} has moved on to ${head:0:7}, so this build of ${SHA:0:7} skips its branch tag and latest."
+            fi
+          fi
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
       - name: Compute tags
         id: meta
         uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
         with:
           images: ${{ needs.plan.outputs.image }}
-          # Empty suffix yields an empty flavor, which is the action's default.
-          flavor: ${{ inputs.tag_suffix != '' && format('suffix={0},onlatest=true', inputs.tag_suffix) || '' }}
+          # latest=false leaves latest to the default-branch rule below; the action's
+          # default also adds it for any semver tag, including one on an older commit.
+          flavor: ${{ inputs.tag_suffix != '' && format('latest=false,suffix={0},onlatest=true', inputs.tag_suffix) || 'latest=false' }}
           tags: |
-            type=ref,event=branch
+            type=ref,event=branch,enable=${{ steps.head.outputs.branch }}
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ steps.head.outputs.latest }}
             type=semver,pattern={{version}},value=${{ inputs.release_version }},enable=${{ inputs.release_version != '' }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.release_version }},enable=${{ inputs.release_version != '' }}
 
