@@ -289,6 +289,11 @@ jobs:
     # Only exists when actually publishing, so a verification run never holds a
     # token with packages: write. Every platform is already built in scan.
     if: ${{ inputs.push }}
+    # One publish per image and ref at a time, whichever workflow calls this. queue: max keeps every
+    # waiting run, where the default replaces a pending one and would drop a release build.
+    concurrency:
+      group: docker-publish-${{ needs.plan.outputs.image }}${{ inputs.tag_suffix }}-${{ github.ref }}
+      queue: max
     # contents: checkout. packages: the GHCR login and push.
     permissions:
       contents: read
@@ -314,8 +319,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Concurrency only orders runs of one workflow. A build from another one (a release job)
-      # can finish after a newer commit's, so the branch tag and latest stay with the newest commit.
+      # Inside the publish queue: a newer commit's build has already published or waits for this one.
+      # Once the branch has moved past this commit, its branch tag and latest are the newer build's.
       - name: Check the branch head
         id: head
         env:
