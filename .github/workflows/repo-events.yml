@@ -33,7 +33,7 @@ jobs:
               # Fork PRs and Dependabot PRs run without access to repo secrets.
               # Exit cleanly so the workflow stays green instead of failing
               # the post-merge pull_request.closed event from external PRs.
-              print("DISCORD_WEBHOOK_URL not available (likely fork or bot PR); skipping notify.")
+              print("::warning::DISCORD_WEBHOOK_URL not available (fork or bot PR, or the secret is unset); skipping notify.")
               sys.exit(0)
 
           event = os.environ["EVENT_NAME"]
