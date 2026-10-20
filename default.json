@@ -90,6 +90,15 @@
       "labels": ["dependencies", "docker", "major"]
     },
     {
+      "description": "Python base image: a new 3.x is only a minor update to Renovate, but every dependency needs wheels for it (onnxruntime had none for 3.15 on 2026-10-20), and the CI python-version and any versioned site-packages path must move in the same PR. Own PR, opened only when approved on the Dependency Dashboard, and merged by hand.",
+      "matchManagers": ["dockerfile"],
+      "matchPackageNames": ["python"],
+      "matchUpdateTypes": ["minor", "major"],
+      "groupName": null,
+      "dependencyDashboardApproval": true,
+      "automerge": false
+    },
+    {
       "description": "Pin all GitHub Actions to SHAs",
       "matchManagers": ["github-actions"],
       "pinDigests": true
