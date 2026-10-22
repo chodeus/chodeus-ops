@@ -249,7 +249,7 @@ jobs:
     if: ${{ always() && needs.compose.result == 'success' }}
     permissions: {}
     # A full ref, not ./: the docs leave ./ undefined for a nested call made from another repo.
-    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@2936e17259531a99e27ca3b6b1c908d537c5e7aa # main
+    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@c9aa5b046ad37c375a332358f5309e13fae65667 # main
     with:
       event_type: workflow
       status: ${{ needs.compose.outputs.status }}
