@@ -35,7 +35,7 @@ jobs:
     if: always() && github.event_name != 'pull_request'
     needs: build
     permissions: {}
-    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@c36f1a3c7e8108f86b3be0e19c5e0d08502f681f # main
+    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@cbd544d21103cfe854c8e0ec717ee2be4f097ad7 # main
     with:
       event_type: build
       status: ${{ needs.build.result == 'success' && 'success' || 'failure' }}
