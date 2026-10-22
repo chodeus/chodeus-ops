@@ -50,6 +50,7 @@ jobs:
       image: alpine:3.20.0
       workflow: smoke-reusables.yml
       dispatch: false
+      notify_dry_run: true
 
   smoke-image-refresh-assert:
     name: image-refresh (stale detected)
@@ -60,9 +61,14 @@ jobs:
       - env:
           STALE: ${{ needs.smoke-image-refresh.outputs.stale }}
           PENDING: ${{ needs.smoke-image-refresh.outputs.pending }}
+          PACKAGES: ${{ needs.smoke-image-refresh.outputs.packages }}
         run: |
           echo "stale=${STALE} pending=${PENDING}"
+          printf '%s\n' "$PACKAGES"
           [ "$STALE" = "true" ] && [ "$PENDING" -gt 0 ]
+          # One "name<TAB>installed<TAB>available" row per pending upgrade, none unparsed.
+          [ "$(printf '%s\n' "$PACKAGES" | grep -c .)" -eq "$PENDING" ]
+          printf '%s\n' "$PACKAGES" | awk -F '\t' 'NF != 3 || $2 == "?" { exit 1 }'
 
   smoke-stale:
     name: stale-issues (no-op days)
@@ -93,6 +99,7 @@ jobs:
       event_type: workflow
       status: info
       title: "smoke test — should not post"
+      needs: '{"lint":{"result":"failure","outputs":{}},"build":{"result":"success","outputs":{}}}'
       dry_run: true
 
   # Both platforms, never pushed, through the HEALTHCHECK gate: exercises the

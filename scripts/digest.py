@@ -6,7 +6,7 @@ report: open Dependabot alerts, failing workflows, open PRs, stale issues,
 last release age.
 
 Usage:
-  digest.py --owner chodeus --repos repo1,repo2 [--format markdown|github-issue|json]
+  digest.py --owner chodeus --repos repo1,repo2 [--format markdown|github-issue|json] [--summary-out FILE]
 
 Requires `gh` CLI authenticated with `security_events:read` + `repo` scopes.
 """
@@ -123,24 +123,40 @@ def repo_snapshot(owner: str, repo: str) -> dict[str, Any]:
     return snap
 
 
+def totals(data: dict[str, Any]) -> dict[str, int]:
+    """Portfolio-wide counts shared by the issue's summary and the Discord post."""
+    repos = data["repos"]
+    return {
+        "critical": sum(r["dependabot_critical"] for r in repos),
+        "high": sum(r["dependabot_high"] for r in repos),
+        "prs": sum(r["open_prs"] for r in repos),
+        "stale_prs": sum(len(r["stale_prs"]) for r in repos),
+        "issues": sum(r["open_issues"] for r in repos),
+        "failures": sum(len(r["recent_failures"]) for r in repos),
+    }
+
+
+def render_summary(data: dict[str, Any]) -> str:
+    t = totals(data)
+    return "\n".join([
+        f"🔴 Critical vulns: {t['critical']} · 🟠 High: {t['high']}",
+        f"🔀 Open PRs: {t['prs']} ({t['stale_prs']} stale) · 🐛 Open issues: {t['issues']}",
+        f"⚙️ Recent workflow failures: {t['failures']}",
+    ])
+
+
 def render_markdown(data: dict[str, Any]) -> str:
     lines: list[str] = []
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines.append(f"# Portfolio digest — {now}\n")
 
-    # Top-level roll-up
-    total_crit = sum(r["dependabot_critical"] for r in data["repos"])
-    total_high = sum(r["dependabot_high"] for r in data["repos"])
-    total_prs = sum(r["open_prs"] for r in data["repos"])
-    total_issues = sum(r["open_issues"] for r in data["repos"])
-    total_fails = sum(len(r["recent_failures"]) for r in data["repos"])
-
+    t = totals(data)
     lines.append("## Summary\n")
-    lines.append(f"- **Critical vulns:** {total_crit}")
-    lines.append(f"- **High vulns:** {total_high}")
-    lines.append(f"- **Open PRs:** {total_prs}")
-    lines.append(f"- **Open issues:** {total_issues}")
-    lines.append(f"- **Recent workflow failures:** {total_fails}\n")
+    lines.append(f"- **Critical vulns:** {t['critical']}")
+    lines.append(f"- **High vulns:** {t['high']}")
+    lines.append(f"- **Open PRs:** {t['prs']}")
+    lines.append(f"- **Open issues:** {t['issues']}")
+    lines.append(f"- **Recent workflow failures:** {t['failures']}\n")
 
     for r in data["repos"]:
         lines.append(f"## [{r['repo']}](https://github.com/{r['repo']})\n")
@@ -175,6 +191,7 @@ def main() -> int:
     ap.add_argument("--owner", required=True)
     ap.add_argument("--repos", required=True, help="Comma-separated repo names")
     ap.add_argument("--format", choices=["markdown", "github-issue", "json"], default="markdown")
+    ap.add_argument("--summary-out", help="Also write the short summary (portfolio totals) to this file")
     args = ap.parse_args()
 
     if not shutil.which("gh"):
@@ -189,6 +206,9 @@ def main() -> int:
         print(json.dumps(data, indent=2))
     else:
         print(render_markdown(data))
+    if args.summary_out:
+        with open(args.summary_out, "w", encoding="utf-8") as f:
+            f.write(render_summary(data) + "\n")
     return 0
 
 

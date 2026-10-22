@@ -42,6 +42,11 @@ on:
         required: false
         type: string
         default: '0'
+      needs:
+        description: "The caller's needs context as JSON (toJSON(needs)); jobs that failed or were cancelled are listed."
+        required: false
+        type: string
+        default: ''
       dry_run:
         description: 'If true, compose the payload but do not POST (for smoke tests).'
         required: false
@@ -72,6 +77,10 @@ jobs:
           CRIT: ${{ inputs.critical_vulns }}
           HIGH: ${{ inputs.high_vulns }}
           DRY_RUN: ${{ inputs.dry_run }}
+          NEEDS_JSON: ${{ inputs.needs }}
+          # The caller's event: a called workflow shares the caller's github context.
+          HEAD_ID: ${{ github.event.head_commit.id }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
           REPO: ${{ github.repository }}
           ACTOR: ${{ github.actor }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -111,9 +120,22 @@ jobs:
             esac
           fi
 
+          if [ -n "$NEEDS_JSON" ]; then
+            FAILED=$(printf '%s' "$NEEDS_JSON" | python3 -c '
+          import json, sys
+          needs = json.load(sys.stdin)
+          print(", ".join(f"`{name}`" for name, job in needs.items() if job.get("result") in ("failure", "cancelled")))
+          ') || FAILED=""
+            if [ -n "$FAILED" ]; then DESC=$(printf '%s\n\n❌ Failed: %s' "$DESC" "$FAILED"); fi
+          fi
+
           if [ -n "$COMMIT_SHA" ]; then
             SHORT="${COMMIT_SHA:0:7}"
-            DESC=$(printf '%s\n\n📝 Commit: [`%s`](https://github.com/%s/commit/%s)' "$DESC" "$SHORT" "$REPO" "$COMMIT_SHA")
+            LINE=$(printf '📝 Commit: [`%s`](https://github.com/%s/commit/%s)' "$SHORT" "$REPO" "$COMMIT_SHA")
+            # head_commit describes the pushed tip, so only attach its subject to that commit.
+            SUBJECT="${HEAD_MSG%%$'\n'*}"
+            if [ -n "$SUBJECT" ] && [ "$HEAD_ID" = "$COMMIT_SHA" ]; then LINE="$LINE — $SUBJECT"; fi
+            DESC=$(printf '%s\n\n%s' "$DESC" "$LINE")
           fi
           if [ -n "$IMAGE_TAG" ]; then
             DESC=$(printf '%s\n🏷 Image: `%s`' "$DESC" "$IMAGE_TAG")
@@ -132,7 +154,9 @@ jobs:
                   "color": int(os.environ["COLOR"]),
                   "url": os.environ["LINK"],
                   "footer": {"text": f"{os.environ['REPO']} · {os.environ['ACTOR']}"},
-              }]
+              }],
+              # Commit subjects and release notes are untrusted text: never let them ping anyone.
+              "allowed_mentions": {"parse": []},
           }
           if os.environ.get("DRY_RUN", "false").lower() == "true":
               print("dry_run: would POST the following payload:")

@@ -12,6 +12,9 @@ permissions:
 jobs:
   digest:
     runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.upsert.outputs.url }}
+      summary: ${{ steps.gen.outputs.summary }}
     steps:
       - name: Checkout chodeus-ops
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -34,14 +37,18 @@ jobs:
           REPOS: ${{ steps.repos.outputs.list }}
           OWNER: chodeus
         run: |
-          python3 scripts/digest.py --owner "$OWNER" --repos "$REPOS" --format github-issue > digest.md
+          python3 scripts/digest.py --owner "$OWNER" --repos "$REPOS" --format github-issue --summary-out summary.txt > digest.md
           {
             echo "body<<EOF"
             cat digest.md
             echo EOF
+            echo "summary<<EOF_SUMMARY"
+            cat summary.txt
+            echo EOF_SUMMARY
           } >> "$GITHUB_OUTPUT"
 
       - name: Upsert digest issue
+        id: upsert
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BODY: ${{ steps.gen.outputs.body }}
@@ -52,10 +59,12 @@ jobs:
           # Find an existing open digest issue (we use label=digest as the single pinned thread)
           NUM=$(gh issue list --label digest --state open --limit 1 --json number --jq '.[0].number' || true)
           if [ -z "$NUM" ] || [ "$NUM" = "null" ]; then
-            gh issue create --title "$TITLE" --label digest --body "$BODY"
+            URL=$(gh issue create --title "$TITLE" --label digest --body "$BODY")
           else
             gh issue edit "$NUM" --title "$TITLE" --body "$BODY"
+            URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues/$NUM"
           fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
 
   notify:
     needs: digest
@@ -64,6 +73,7 @@ jobs:
       event_type: workflow
       status: success
       title: "📊 Weekly digest updated"
-      description: "See the digest issue in chodeus-ops for open alerts, failing workflows, stale PRs, and outdated base images."
+      description: ${{ needs.digest.outputs.summary }}
+      url: ${{ needs.digest.outputs.url }}
     secrets:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
