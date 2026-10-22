@@ -27,7 +27,7 @@ DISABLED = object()
 
 
 def gh_api(path: str, paginate: bool = True) -> Any:
-    """Call `gh api <path>` and return parsed JSON, or None on failure.
+    """Call `gh api <path>`: parsed JSON, DISABLED when GitHub says the feature is off, None on any other failure.
 
     `paginate=False` honors any ?per_page= cap in the path. Use it for bounded
     queries (e.g. ?per_page=20) — otherwise --paginate ignores the cap and

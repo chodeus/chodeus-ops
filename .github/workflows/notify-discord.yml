@@ -121,12 +121,13 @@ jobs:
           fi
 
           if [ -n "$NEEDS_JSON" ]; then
-            FAILED=$(printf '%s' "$NEEDS_JSON" | python3 -c '
+            JOBS=$(printf '%s' "$NEEDS_JSON" | python3 -c '
           import json, sys
           needs = json.load(sys.stdin)
-          print(", ".join(f"`{name}`" for name, job in needs.items() if job.get("result") in ("failure", "cancelled")))
-          ') || FAILED=""
-            if [ -n "$FAILED" ]; then DESC=$(printf '%s\n\n❌ Failed: %s' "$DESC" "$FAILED"); fi
+          names = {r: ", ".join(f"`{n}`" for n, j in needs.items() if j.get("result") == r) for r in ("failure", "cancelled")}
+          print(" · ".join(f"{label}: {names[r]}" for r, label in (("failure", "❌ Failed"), ("cancelled", "⏹️ Cancelled")) if names[r]))
+          ') || JOBS=""
+            if [ -n "$JOBS" ]; then DESC=$(printf '%s\n\n%s' "$DESC" "$JOBS"); fi
           fi
 
           if [ -n "$COMMIT_SHA" ]; then

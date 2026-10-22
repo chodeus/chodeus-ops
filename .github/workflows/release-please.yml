@@ -87,7 +87,7 @@ jobs:
               """The first lines of release notes, without the version heading or commit links."""
               lines, cut = [], False
               for line in (body or "").splitlines():
-                  if line.startswith("```"):
+                  if re.match(r" {0,3}(```|~~~)", line):
                       cut = True
                       break
                   line = re.sub(r" ?\(\[[0-9a-f]{7,40}\]\([^)]*\)\)", "", line).rstrip()
@@ -95,7 +95,9 @@ jobs:
                       lines.append(re.sub(r"^#{3,6} (.+)", r"**\1**", line))
               text = "\n".join(lines[:max_lines])
               if len(text) > max_chars:
-                  text = text[:max_chars].rsplit("\n", 1)[0]
+                  cut = text[:max_chars]
+                  # End on a whole line only when that keeps most of the window; else cut mid-line.
+                  text = cut.rsplit("\n", 1)[0] if "\n" in cut[max_chars // 2:] else cut.rstrip() + "…"
               if cut or text != "\n".join(lines):
                   text += f"\n… [full notes]({url})"
               return text
