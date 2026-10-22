@@ -22,6 +22,10 @@ import sys
 from typing import Any
 
 
+# gh_api's answer when GitHub says the feature is switched off for the repo: a setting, not a failed read.
+DISABLED = object()
+
+
 def gh_api(path: str, paginate: bool = True) -> Any:
     """Call `gh api <path>` and return parsed JSON, or None on failure.
 
@@ -44,7 +48,8 @@ def gh_api(path: str, paginate: bool = True) -> Any:
         sys.stderr.write("error: `gh` CLI not found on PATH\n")
         sys.exit(2)
     if r.returncode != 0:
-        # 404 / no-access is common (Dependabot alerts on public repos without advanced security)
+        if "are disabled for this repository" in r.stdout + r.stderr:
+            return DISABLED
         return None
     try:
         # --paginate may emit concatenated JSON arrays; flatten them
@@ -78,9 +83,20 @@ def age_days(iso: str) -> int:
 
 def repo_snapshot(owner: str, repo: str) -> dict[str, Any]:
     full = f"{owner}/{repo}"
-    snap: dict[str, Any] = {"repo": full}
+    snap: dict[str, Any] = {"repo": full, "unread": [], "off": []}
 
-    alerts = gh_api(f"/repos/{full}/dependabot/alerts?state=open") or []
+    def read(label: str, path: str, default: Any, paginate: bool = True) -> Any:
+        """gh_api, noting a failed read as unread so a zero count is never mistaken for a clean one."""
+        data = gh_api(path, paginate)
+        if data is DISABLED:
+            snap["off"].append(label)
+            return default
+        if data is None:
+            snap["unread"].append(label)
+            return default
+        return data
+
+    alerts = read("Dependabot alerts", f"/repos/{full}/dependabot/alerts?state=open", [])
     snap["dependabot_open"] = len(alerts)
     snap["dependabot_critical"] = sum(
         1 for a in alerts if a.get("security_vulnerability", {}).get("severity") == "critical"
@@ -89,7 +105,7 @@ def repo_snapshot(owner: str, repo: str) -> dict[str, Any]:
         1 for a in alerts if a.get("security_vulnerability", {}).get("severity") == "high"
     )
 
-    prs = gh_api(f"/repos/{full}/pulls?state=open") or []
+    prs = read("pull requests", f"/repos/{full}/pulls?state=open", [])
     snap["open_prs"] = len(prs)
     snap["stale_prs"] = [
         {"number": p["number"], "title": p["title"], "age": age_days(p["updated_at"])}
@@ -97,12 +113,12 @@ def repo_snapshot(owner: str, repo: str) -> dict[str, Any]:
         if age_days(p["updated_at"]) >= 14
     ]
 
-    issues = gh_api(f"/repos/{full}/issues?state=open") or []
+    issues = read("issues", f"/repos/{full}/issues?state=open", [])
     # Filter out PRs (GitHub issues endpoint includes them)
     issues = [i for i in issues if "pull_request" not in i]
     snap["open_issues"] = len(issues)
 
-    runs = gh_api(f"/repos/{full}/actions/runs?per_page=20", paginate=False) or {}
+    runs = read("workflow runs", f"/repos/{full}/actions/runs?per_page=20", {}, paginate=False)
     runs_list = runs.get("workflow_runs", []) if isinstance(runs, dict) else []
     snap["recent_failures"] = [
         {"name": r["name"], "url": r["html_url"], "branch": r.get("head_branch")}
@@ -110,7 +126,7 @@ def repo_snapshot(owner: str, repo: str) -> dict[str, Any]:
         if r.get("conclusion") == "failure"
     ][:5]
 
-    releases = gh_api(f"/repos/{full}/releases?per_page=1", paginate=False) or []
+    releases = read("releases", f"/repos/{full}/releases?per_page=1", [], paginate=False)
     if releases and isinstance(releases, list):
         latest = releases[0]
         snap["last_release"] = {
@@ -133,12 +149,14 @@ def totals(data: dict[str, Any]) -> dict[str, int]:
         "stale_prs": sum(len(r["stale_prs"]) for r in repos),
         "issues": sum(r["open_issues"] for r in repos),
         "failures": sum(len(r["recent_failures"]) for r in repos),
+        "unread": sum(1 for r in repos if r.get("unread")),
     }
 
 
 def render_summary(data: dict[str, Any]) -> str:
     t = totals(data)
-    return "\n".join([
+    warning = [f"⚠️ Incomplete: {t['unread']} repo(s) could not be fully read, so these counts may be too low."] if t["unread"] else []
+    return "\n".join(warning + [
         f"🔴 Critical vulns: {t['critical']} · 🟠 High: {t['high']}",
         f"🔀 Open PRs: {t['prs']} ({t['stale_prs']} stale) · 🐛 Open issues: {t['issues']}",
         f"⚙️ Recent workflow failures: {t['failures']}",
@@ -152,6 +170,8 @@ def render_markdown(data: dict[str, Any]) -> str:
 
     t = totals(data)
     lines.append("## Summary\n")
+    if t["unread"]:
+        lines.append(f"- ⚠️ **Repos not fully read:** {t['unread']} (their counts below are incomplete)")
     lines.append(f"- **Critical vulns:** {t['critical']}")
     lines.append(f"- **High vulns:** {t['high']}")
     lines.append(f"- **Open PRs:** {t['prs']}")
@@ -160,6 +180,10 @@ def render_markdown(data: dict[str, Any]) -> str:
 
     for r in data["repos"]:
         lines.append(f"## [{r['repo']}](https://github.com/{r['repo']})\n")
+        if r.get("unread"):
+            lines.append(f"- ⚠️ Could not read: {', '.join(r['unread'])}")
+        if r.get("off"):
+            lines.append(f"- Turned off for this repo: {', '.join(r['off'])}")
         lines.append(
             f"- Dependabot — critical: **{r['dependabot_critical']}**, "
             f"high: **{r['dependabot_high']}**, "

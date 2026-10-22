@@ -164,15 +164,19 @@ jobs:
           PENDING: ${{ needs.check.outputs.pending }}
         run: |
           set -euo pipefail
+          # The dispatch API returns no run id: the new run is one absent from this list and created after now.
+          # The link is best-effort, so a lookup failure never fails the job.
+          before=$(gh run list --workflow "$WORKFLOW" --branch "$REF" --event workflow_dispatch --limit 20 \
+            --json databaseId --jq '[.[].databaseId]' || echo '[]')
           # A little before now, so runner clock skew can't hide the run from the lookup below.
           since=$(date -u -d '-30 seconds' +%Y-%m-%dT%H:%M:%SZ)
           gh workflow run "$WORKFLOW" --ref "$REF"
           echo "Dispatched ${WORKFLOW} on ${REF}: ${PENDING} pending package upgrade(s)." | tee -a "$GITHUB_STEP_SUMMARY"
-          # The dispatch API returns no run id; the link is best-effort, so a lookup failure never fails the job.
           url=""
           for _ in $(seq 1 12); do
-            url=$(gh run list --workflow "$WORKFLOW" --branch "$REF" --event workflow_dispatch --limit 5 \
-              --json url,createdAt --jq "[.[] | select(.createdAt >= \"$since\")] | last | .url // empty" || true)
+            url=$(gh run list --workflow "$WORKFLOW" --branch "$REF" --event workflow_dispatch --limit 20 \
+              --json databaseId,url,createdAt \
+              --jq "${before:-[]} as \$b | [.[] | select(.createdAt >= \"$since\" and ([.databaseId] | inside(\$b) | not))] | last | .url // empty" || true)
             [ -n "$url" ] && break
             sleep 5
           done
