@@ -9,7 +9,7 @@ automatically instead of silently missing every workflow that iterates
 A handful of forks are pure upstream trackers with no chodeus-specific
 changes worth sweeping/digesting; those are excluded by name below. Forks
 we DO actively maintain (folder.view3, appdata.cleanup.ng,
-robsonfelix-hass-addons) are NOT in this list and so are included, along
+ha-claude-code) are NOT in this list and so are included, along
 with every other non-archived repo.
 
 Used by both security-sweep.yml and weekly-digest.yml — keep SKIP_REPOS

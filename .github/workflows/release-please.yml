@@ -73,21 +73,43 @@ jobs:
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
           REPO: ${{ github.repository }}
           TAG: ${{ steps.release.outputs.tag_name }}
+          NOTES: ${{ steps.release.outputs.body }}
           URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.release.outputs.tag_name }}
         run: |
           python3 - <<'PY'
-          import json, os, sys, urllib.request
+          import json, os, re, sys, urllib.request
           if not os.environ.get("WEBHOOK"):
               print("DISCORD_WEBHOOK_URL not passed; skipping the release post.")
               sys.exit(0)
+
+          # Keep in sync with notes_excerpt in repo-events.yml.
+          def notes_excerpt(body, url, max_lines=8, max_chars=1000):
+              """The first lines of release notes, without the version heading or commit links."""
+              lines, cut = [], False
+              for line in (body or "").splitlines():
+                  if re.match(r" {0,3}(```|~~~)", line):
+                      cut = True
+                      break
+                  line = re.sub(r" ?\(\[[0-9a-f]{7,40}\]\([^)]*\)\)", "", line).rstrip()
+                  if line and not line.startswith("## "):
+                      lines.append(re.sub(r"^#{3,6} (.+)", r"**\1**", line))
+              text = "\n".join(lines[:max_lines])
+              if len(text) > max_chars:
+                  cut = text[:max_chars]
+                  # End on a whole line only when that keeps most of the window; else cut mid-line.
+                  text = cut.rsplit("\n", 1)[0] if "\n" in cut[max_chars // 2:] else cut.rstrip() + "…"
+              if cut or text != "\n".join(lines):
+                  text += f"\n… [full notes]({url})"
+              return text
+
           # Same embed as repo-events.yml's release branch.
           payload = {"embeds": [{
               "title": f"🚀 Release published: {os.environ['TAG']}"[:256],
-              "description": "",
+              "description": notes_excerpt(os.environ.get("NOTES"), os.environ["URL"]),
               "color": 3066993,
               "url": os.environ["URL"],
               "footer": {"text": os.environ["REPO"]},
-          }]}
+          }], "allowed_mentions": {"parse": []}}
           req = urllib.request.Request(
               os.environ["WEBHOOK"],
               data=json.dumps(payload).encode(),

@@ -59,6 +59,26 @@ jobs:
               pkgs = re.findall(r"^\s*\|\s*\[?([a-zA-Z0-9._/-]+)\]?[^|]*\|", body, re.M)
               return len([p for p in pkgs if p.lower() not in ("package", "---")])
 
+          # Keep in sync with notes_excerpt in release-please.yml.
+          def notes_excerpt(body, url, max_lines=8, max_chars=1000):
+              """The first lines of release notes, without the version heading or commit links."""
+              lines, cut = [], False
+              for line in (body or "").splitlines():
+                  if re.match(r" {0,3}(```|~~~)", line):
+                      cut = True
+                      break
+                  line = re.sub(r" ?\(\[[0-9a-f]{7,40}\]\([^)]*\)\)", "", line).rstrip()
+                  if line and not line.startswith("## "):
+                      lines.append(re.sub(r"^#{3,6} (.+)", r"**\1**", line))
+              text = "\n".join(lines[:max_lines])
+              if len(text) > max_chars:
+                  cut = text[:max_chars]
+                  # End on a whole line only when that keeps most of the window; else cut mid-line.
+                  text = cut.rsplit("\n", 1)[0] if "\n" in cut[max_chars // 2:] else cut.rstrip() + "…"
+              if cut or text != "\n".join(lines):
+                  text += f"\n… [full notes]({url})"
+              return text
+
           # Lean default: single-line title, nothing else unless it adds signal.
           title = f"{event}.{action} in {repo}"
           url = f"https://github.com/{repo}"
@@ -97,6 +117,9 @@ jobs:
               title = f"🚀 Release {action}: {tag}"
               url = rel.get("html_url", url)
               color = COLOR_RELEASE
+              notes = notes_excerpt(rel.get("body"), url)
+              if notes:
+                  desc_lines.append(notes)
 
           elif event == "discussion":
               disc = data.get("discussion", {})
@@ -112,6 +135,10 @@ jobs:
               title = f"⚙️ {run.get('name', '?')} failed on {run.get('head_branch')}"
               url = run.get("html_url", url)
               color = COLOR_FAIL
+              sha = run.get("head_sha") or ""
+              subject = ((run.get("head_commit") or {}).get("message") or "").split("\n", 1)[0][:200]
+              if sha:
+                  desc_lines.append(f"📝 Commit: [`{sha[:7]}`](https://github.com/{repo}/commit/{sha})" + (f" — {subject}" if subject else ""))
 
           payload = {
               "embeds": [{
@@ -120,7 +147,9 @@ jobs:
                   "color": color,
                   "url": url,
                   "footer": {"text": f"{repo}"},
-              }]
+              }],
+              # PR, issue and commit text is untrusted: never let it ping anyone.
+              "allowed_mentions": {"parse": []},
           }
 
           # webhook already validated non-empty at the top of this script
