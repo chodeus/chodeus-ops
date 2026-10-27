@@ -110,11 +110,12 @@
       "description": "A version passed to a setup action (node-version, python-version) is not an action and has no commit to pin. With pinDigests on, Renovate found no digest for the new actions/node-versions or actions/python-versions tag and dropped every such update. replace keeps the form a workflow uses, so '24' moves to '26' rather than to an exact patch.",
       "matchManagers": ["github-actions"],
       "matchDepTypes": ["uses-with"],
+      "matchDepNames": ["node", "python"],
       "pinDigests": false,
       "rangeStrategy": "replace"
     },
     {
-      "description": "setup-node's and setup-python's runtime versions join their images' updates instead of the github-actions group: non-major ones the all-minor-patch group the images use, and a Node major renovate/node-<major>.x with the image and engines. Split over two PRs, a Node major fails CI in both (spotify-to-plex #18 and #19).",
+      "description": "setup-node's and setup-python's runtime versions join their images' updates instead of the github-actions group. Node minors and patches and Python patches join all-minor-patch, as the images' do; a Node major joins renovate/node-<major>.x with the image and engines (split over two PRs it fails CI in both: spotify-to-plex #18 and #19). Python minors are taken out by the next rule but one and merged by hand.",
       "matchManagers": ["github-actions"],
       "matchDepNames": ["node", "python"],
       "matchUpdateTypes": ["minor", "patch"],
