@@ -105,6 +105,27 @@
       "description": "Pin all GitHub Actions to SHAs",
       "matchManagers": ["github-actions"],
       "pinDigests": true
+    },
+    {
+      "description": "A version passed to a setup action (node-version, python-version) is not an action and has no commit to pin. With pinDigests on, Renovate found no digest for the new actions/node-versions or actions/python-versions tag and dropped every such update. replace keeps the form a workflow uses, so '24' moves to '26' rather than to an exact patch.",
+      "matchManagers": ["github-actions"],
+      "matchDepTypes": ["uses-with"],
+      "pinDigests": false,
+      "rangeStrategy": "replace"
+    },
+    {
+      "description": "setup-node's Node is the CI runtime, so it joins the Node image and engines in renovate/node-<major>.x instead of the github-actions group. Split over two PRs, a Node major fails CI in both (spotify-to-plex #18 and #19).",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["node"],
+      "groupName": null
+    },
+    {
+      "description": "setup-python's Python moves with the Python image in renovate/python-3.x, merged by hand, as the Python base-image rule requires.",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["python"],
+      "matchUpdateTypes": ["minor", "major"],
+      "groupName": null,
+      "automerge": false
     }
   ],
   "dockerfile": {
