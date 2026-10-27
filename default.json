@@ -102,6 +102,12 @@
       "automerge": false
     },
     {
+      "description": "engines states the oldest supported engine or tool (node, npm, pnpm) and is raised on purpose; replace leaves a >= range alone while new versions satisfy it.",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["engines"],
+      "rangeStrategy": "replace"
+    },
+    {
       "description": "Pin all GitHub Actions to SHAs",
       "matchManagers": ["github-actions"],
       "pinDigests": true
