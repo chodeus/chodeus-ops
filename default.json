@@ -105,6 +105,37 @@
       "description": "Pin all GitHub Actions to SHAs",
       "matchManagers": ["github-actions"],
       "pinDigests": true
+    },
+    {
+      "description": "setup-node and setup-python versions are not actions, so there is no digest to pin; replace keeps their form ('24' moves to '26').",
+      "matchManagers": ["github-actions"],
+      "matchDepTypes": ["uses-with"],
+      "matchDepNames": ["node", "python"],
+      "pinDigests": false,
+      "rangeStrategy": "replace"
+    },
+    {
+      "description": "setup-node and setup-python versions move with their images: Node minors and patches and Python patches join all-minor-patch.",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["node", "python"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "all non-major dependencies",
+      "groupSlug": "all-minor-patch"
+    },
+    {
+      "description": "A setup-node major joins the Node image and engines in renovate/node-<major>.x.",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["node"],
+      "matchUpdateTypes": ["major"],
+      "groupName": null
+    },
+    {
+      "description": "setup-python's Python moves with the Python image in renovate/python-3.x, merged by hand, as the Python base-image rule requires.",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["python"],
+      "matchUpdateTypes": ["minor", "major"],
+      "groupName": null,
+      "automerge": false
     }
   ],
   "dockerfile": {
