@@ -107,11 +107,17 @@
       "pinDigests": true
     },
     {
-      "description": "setup-node and setup-python versions are not actions, so there is no digest to pin; replace keeps their form ('24' moves to '26').",
+      "description": "A version an action takes as input (setup-node's node-version, trivy-action's version) names a release to download, so a commit sha there breaks the step. Docker image inputs stay pinned.",
+      "matchManagers": ["github-actions"],
+      "matchDepTypes": ["uses-with"],
+      "matchDatasources": ["!docker"],
+      "pinDigests": false
+    },
+    {
+      "description": "replace keeps the form a workflow uses for its runtime: '24' moves to '26', not to an exact patch.",
       "matchManagers": ["github-actions"],
       "matchDepTypes": ["uses-with"],
       "matchDepNames": ["node", "python"],
-      "pinDigests": false,
       "rangeStrategy": "replace"
     },
     {
