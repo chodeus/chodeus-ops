@@ -46,7 +46,7 @@ $PLGR check --changelog "$CHANGELOG" --plg "$PLG" --channel "$CHANNEL" --branch 
 # Each release names the one before it on its channel and how to go back to it. Installing a lower version
 # needs "forced"; removing the plugin first would delete its settings (both remove scripts rm -rf them).
 rollback_footer() {
-  local pre=false prev path url cmd
+  local pre=false prev stable="" path url cmd
   [ "$CHANNEL" = stable ] || pre=true
   # a failed lookup must stop the release, not ship it without this note: set -e does not reach into $( )
   prev=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
@@ -66,6 +66,12 @@ rollback_footer() {
     printf '%s\n' "" "Rollback to $prev if this release breaks something for you. In a terminal on the server, this goes back and keeps your settings:" '```' "$cmd" '```'
   fi
   if [ "$CHANNEL" = beta ]; then
+    # Before a plugin's first stable release there is nothing to go back to, and its stable branch may not install.
+    stable=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+        --jq '.[] | select((.draft | not) and .prerelease == false and (.tag_name | test("^v[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}(\\.[0-9]+)?$"))) | .tag_name') \
+      || { echo "could not list stable releases for the rollback note" >&2; return 1; }
+  fi
+  if [ -n "$stable" ]; then
     $PLGR verify-manifest --url "${STABLE_PLUGIN_URL:?}" >/dev/null \
       || { echo "the way back to stable would point at $STABLE_PLUGIN_URL, which does not install" >&2; return 1; }
     printf -v cmd 'plugin install %q forced' "$STABLE_PLUGIN_URL"
