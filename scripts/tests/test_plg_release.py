@@ -571,6 +571,28 @@ def test_first_beta_offers_only_the_way_back_to_stable(tmp_path):
     assert "Rollback to" not in r.stdout and "go back to the stable release" in r.stdout
 
 
+def test_first_beta_before_any_stable_release_has_no_note_and_checks_no_stable_manifest(tmp_path):
+    """A new plugin's stable branch may hold a manifest that can't install; the helper must not be asked."""
+    r = _rollback_footer(tmp_path, _gh_listing("[]"), channel="beta", plgr_body="exit 1")
+    assert (r.returncode, r.stdout) == (0, ""), r.stderr
+
+
+def test_later_beta_before_any_stable_release_offers_only_the_previous_beta(tmp_path):
+    beta = '[{"tag_name":"v2026.09.20.1","prerelease":true,"draft":false}]'
+    r = _rollback_footer(tmp_path, _gh_listing(beta), channel="beta",
+                         plgr_body='case "$*" in *main/plugin.plg*) exit 1;; esac; echo verified')
+    assert r.returncode == 0, r.stderr
+    assert "Rollback to v2026.09.20.1" in r.stdout and "go back to the stable release" not in r.stdout
+    assert "Removing the plugin first would delete its settings." in r.stdout
+
+
+def test_a_failed_stable_release_lookup_stops_the_beta(tmp_path):
+    """No stable release and an unreadable listing are different: the note must not silently disappear."""
+    gh = ('case "$*" in *"prerelease == false"*) exit 1;; esac\necho v2026.09.20.1')
+    r = _rollback_footer(tmp_path, gh, channel="beta", call='rollback=$(rollback_footer); echo reached')
+    assert r.returncode != 0 and "reached" not in r.stdout
+
+
 def test_rollback_note_finds_the_previous_release_past_the_first_page(tmp_path):
     """A run of betas can push the last stable release off the first page of the listing."""
     betas = json.dumps([{"tag_name": f"v2026.09.20.{n}", "prerelease": True, "draft": False} for n in range(100, 0, -1)])
