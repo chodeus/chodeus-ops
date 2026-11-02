@@ -40,6 +40,7 @@ env:
   HEAD: ${{ inputs.head_owner }}:${{ inputs.head_branch }}
   HEAD_SHA: ${{ inputs.head_sha }}
   LABEL: ${{ inputs.label }}
+  TRIGGERED_BY: ${{ github.event.workflow_run.triggering_actor.login }}
   PLG_PATH: ${{ inputs.plg_file }}
   MARKER: '<!-- pr-build -->'
 
@@ -69,6 +70,12 @@ jobs:
             echo "Pull request #$number does not carry the $LABEL label; nothing to publish."
             exit 0
           fi
+          # A PR's own workflow can run on a push while the label is on; only a maintainer's run is the go.
+          permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$TRIGGERED_BY/permission" --jq .permission 2>/dev/null || true)
+          case "$permission" in
+            admin|write) ;;
+            *) echo "This run was started by '$TRIGGERED_BY', who cannot ask for a test build; nothing to publish."; exit 0 ;;
+          esac
           echo "number=$number" >> "$GITHUB_OUTPUT"
 
       - name: Download the build
