@@ -86,11 +86,12 @@ jobs:
         run: |
           set -euo pipefail
           url=$(xmllint --noent --xpath 'string(/PLUGIN/@pluginURL)' "$PLG" 2>/dev/null || true)
-          if [[ "$url" =~ ^https://raw\.githubusercontent\.com/[^/]+/[^/]+/([A-Za-z0-9._+-]+)/ ]]; then
+          if [[ "$url" =~ ^https://raw\.githubusercontent\.com/[^/]+/[^/]+/([^/]+)/ ]] \
+             && git check-ref-format --branch "${BASH_REMATCH[1]}" >/dev/null 2>&1; then
             branch="${BASH_REMATCH[1]}"
           else
             branch="$GITHUB_REF_NAME"
-            echo "::warning::no branch in $PLG's pluginURL ('$url'); the test build follows $branch for updates"
+            echo "::warning::no branch in $PLG's pluginURL ('$url'); building with --branch $branch"
           fi
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           echo "update branch $branch"
@@ -124,11 +125,13 @@ jobs:
           # Only this step gets the write token: the build runs the dispatched branch's own script.
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
-          BRANCH: ${{ steps.branch.outputs.branch }}
         run: |
           set -euo pipefail
           plg="$(basename "$PLG")"
           txz=$(find dist -maxdepth 1 -name '*.txz' -type f)
+          # What servers will check, read from the published manifest: the build script decides what pluginURL says.
+          update_url=$(xmllint --noent --xpath 'string(/PLUGIN/@pluginURL)' "dist/$plg" 2>/dev/null || true)
+          [ -n "$update_url" ] || update_url="the manifest's pluginURL"
           tag="$TAG-$VERSION"
           install_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$plg"
           # gh release create ignores --target for an existing tag, so delete the release AND the tag first.
@@ -140,7 +143,7 @@ jobs:
           fi
           notes=$(mktemp)
           {
-            echo "Test build of \`$GITHUB_REF_NAME\` at $GITHUB_SHA. Not a release: the next test build removes this one, and Check for Updates follows \`$BRANCH\`, so its next release supersedes this one."
+            echo "Test build of \`$GITHUB_REF_NAME\` at $GITHUB_SHA. Not a release: the next test build removes this one. Check for Updates reads \`$update_url\`, so the next release published there supersedes it."
             echo
             echo "Install: Plugins > Install Plugin > paste \`$install_url\`"
           } > "$notes"

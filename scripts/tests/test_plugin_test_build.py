@@ -46,15 +46,21 @@ def _update_branch(tmp_path, url, ref):
     ("https://raw.githubusercontent.com/&github;/beta/&name;.plg", "beta", "beta"),
     ("https://raw.githubusercontent.com/&github;/main/&name;.plg", "main", "main"),
     ("https://raw.githubusercontent.com/chodeus/folder.view3/beta/folder.view3.plg", "feat/x", "beta"),
+    # Any segment plg_release.py accepts and git allows as a branch name.
+    ("https://raw.githubusercontent.com/&github;/release!/&name;.plg", "feat/x", "release!"),
 ])
 def test_update_branch_comes_from_the_manifest(tmp_path, url, ref, want):
     assert _update_branch(tmp_path, url, ref)[0] == want
 
 
-def test_an_unknown_plugin_url_keeps_the_built_branch_and_warns(tmp_path):
-    branch, stdout = _update_branch(tmp_path, "https://example.com/zfs.master.plg", "feat/x")
+@pytest.mark.parametrize("url", [
+    "https://example.com/zfs.master.plg",
+    "https://raw.githubusercontent.com/&github;/bad..name/&name;.plg",
+])
+def test_an_unusable_plugin_url_keeps_the_built_branch_and_warns(tmp_path, url):
+    branch, stdout = _update_branch(tmp_path, url, "feat/x")
     assert branch == "feat/x"
-    assert "::warning::" in stdout
+    assert "::warning::" in stdout and "--branch feat/x" in stdout
 
 
 def test_the_build_gets_the_picked_branch(tmp_path):
@@ -67,6 +73,30 @@ def test_the_build_gets_the_picked_branch(tmp_path):
            "BRANCH": "beta", "GITHUB_REF_NAME": "fix/live-test-findings"}
     subprocess.run(["bash", "-c", step["run"]], cwd=tmp_path, env=env, check=True, capture_output=True)
     assert args.read_text().split() == ["--version", "2026.11.06.1.0261106010101", "--branch", "beta"]
+
+
+def test_the_release_notes_name_the_published_update_url(tmp_path):
+    """The build script decides pluginURL, so the notes read it from the manifest being published."""
+    published = "https://raw.githubusercontent.com/chodeus/ZFS-Master-NG/beta/zfs.master.plg"
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist/plugin.plg").write_text(MANIFEST.format(url=published))
+    (tmp_path / "dist/plugin.txz").write_text("pkg")
+    notes = tmp_path / "notes.txt"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    # gh stand-in: no existing release or tag, and `release create` keeps its notes file.
+    (bin_dir / "gh").write_text(
+        '#!/bin/bash\n[ "$1 $2" = "release create" ] || exit 1\n'
+        f'while [ $# -gt 0 ]; do [ "$1" = --notes-file ] && cp "$2" "{notes}"; shift; done\n')
+    (bin_dir / "gh").chmod(0o755)
+    out = tmp_path / "out.txt"
+    out.touch()
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "PLG": "plugin.plg", "TAG": "test",
+           "VERSION": "2026.11.06.1.0261106010101", "VERSION_IN": "", "GITHUB_REPOSITORY": "chodeus/ZFS-Master-NG",
+           "GITHUB_SHA": "a" * 40, "GITHUB_REF_NAME": "fix/live-test-findings", "GITHUB_OUTPUT": str(out)}
+    subprocess.run(["bash", "-c", _step("Publish the pre-release")["run"]], cwd=tmp_path, env=env,
+                   check=True, capture_output=True)
+    assert f"Check for Updates reads `{published}`" in notes.read_text()
 
 
 def test_the_branch_is_picked_after_xmllint_and_before_the_build():
