@@ -41,7 +41,7 @@ def _update_branch(tmp_path, url, ref):
 
 
 @pytest.mark.parametrize("url,ref,want", [
-    # A pull request branch is deleted on merge; its manifest names the branch it merges into.
+    # A pull request branch is deleted on merge; its manifest names the branch it was cut from.
     ("https://raw.githubusercontent.com/&github;/beta/&name;.plg", "fix/live-test-findings", "beta"),
     ("https://raw.githubusercontent.com/&github;/beta/&name;.plg", "beta", "beta"),
     ("https://raw.githubusercontent.com/&github;/main/&name;.plg", "main", "main"),
