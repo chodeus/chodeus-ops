@@ -1,7 +1,7 @@
 name: Reusable — Unraid plugin test build
 
 # Builds the dispatched ref into a pre-release tagged <release_tag>-<version> whose manifest URL can be
-# pasted into Plugins > Install Plugin. No branch push, no v-tag, and pluginURL stays on the built branch.
+# pasted into Plugins > Install Plugin. No branch push, no v-tag; pluginURL keeps the branch the manifest names.
 
 on:
   workflow_call:
@@ -75,18 +75,36 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "version $version"
 
+      - name: Install xmllint
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-utils
+
+      # pluginURL outlives the test and a PR branch is deleted on merge: keep the branch the manifest names (a channel
+      # names itself, a PR branch the one it was cut from). Mirrors PLUGIN_URL_BRANCH_RE in scripts/plg_release.py.
+      - name: Pick the update branch
+        id: branch
+        run: |
+          set -euo pipefail
+          url=$(xmllint --noent --xpath 'string(/PLUGIN/@pluginURL)' "$PLG" 2>/dev/null || true)
+          if [[ "$url" =~ ^https://raw\.githubusercontent\.com/[^/]+/[^/]+/([^/]+)/ ]] \
+             && git check-ref-format --branch "${BASH_REMATCH[1]}" >/dev/null 2>&1; then
+            branch="${BASH_REMATCH[1]}"
+          else
+            branch="$GITHUB_REF_NAME"
+            echo "::warning::no branch in $PLG's pluginURL ('$url'); building with --branch $branch"
+          fi
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "update branch $branch"
+
       - name: Build the package
         env:
           VERSION: ${{ steps.ver.outputs.version }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
         run: |
           set -euo pipefail
           read -ra build <<< "$BUILD_CMD"
-          "${build[@]}" --version "$VERSION" --branch "$GITHUB_REF_NAME"
+          "${build[@]}" --version "$VERSION" --branch "$BRANCH"
           mapfile -t txz < <(find dist -maxdepth 1 -name '*.txz' -type f)
           [ "${#txz[@]}" -eq 1 ] || { echo "::error::expected exactly one dist/*.txz, found ${#txz[@]}"; exit 1; }
-
-      - name: Install xmllint
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-utils
 
       - name: Point the manifest at the test asset
         env:
@@ -110,6 +128,9 @@ jobs:
           set -euo pipefail
           plg="$(basename "$PLG")"
           txz=$(find dist -maxdepth 1 -name '*.txz' -type f)
+          # What servers will check, read from the published manifest: the build script decides what pluginURL says.
+          update_url=$(xmllint --noent --xpath 'string(/PLUGIN/@pluginURL)' "dist/$plg" 2>/dev/null || true)
+          [ -n "$update_url" ] || update_url="the manifest's pluginURL"
           tag="$TAG-$VERSION"
           install_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$plg"
           # gh release create ignores --target for an existing tag, so delete the release AND the tag first.
@@ -121,7 +142,7 @@ jobs:
           fi
           notes=$(mktemp)
           {
-            echo "Test build of \`$GITHUB_REF_NAME\` at $GITHUB_SHA. Not a release: the next test build removes this one, and the next real release supersedes it through Check for Updates."
+            echo "Test build of \`$GITHUB_REF_NAME\` at $GITHUB_SHA. Not a release: the next test build removes this one. Check for Updates reads \`$update_url\`, so the next release published there supersedes it."
             echo
             echo "Install: Plugins > Install Plugin > paste \`$install_url\`"
           } > "$notes"
