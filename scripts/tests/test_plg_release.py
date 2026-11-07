@@ -484,6 +484,45 @@ def test_cut_retires_the_release_branch_only_after_the_base_push():
     assert push < disarm < gone, "the branch goes only once the release is fully published"
 
 
+def _retire_release_branch(tmp_path, state):
+    """Run the cut's release-branch retirement against a local origin where release/beta is gone, rebuilt or as merged."""
+    body = (SCRIPTS / "plg_release_cut.sh").read_text()
+    start = body.index('if [ -n "$PR_NUMBER" ]; then')
+    block = body[start:body.index("\nfi\n", start) + 4]
+    git = lambda *a, cwd=tmp_path / "work": subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+    subprocess.run(["git", "init", "-q", "--bare", str(tmp_path / "origin.git")], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path / "work")], check=True)
+    for k, v in (("user.name", "t"), ("user.email", "t@example.com")):
+        git("config", k, v)
+    git("remote", "add", "origin", str(tmp_path / "origin.git"))
+    git("commit", "-q", "--allow-empty", "-m", "merged")
+    merged = git("rev-parse", "HEAD")
+    git("push", "-q", "origin", "HEAD:refs/heads/release/beta")
+    if state == "gone":
+        git("push", "-q", "origin", ":refs/heads/release/beta")
+    elif state == "rebuilt":
+        git("commit", "-q", "--allow-empty", "-m", "rebuilt for the next PR")
+        git("push", "-q", "-f", "origin", "HEAD:refs/heads/release/beta")
+    elif state == "unreachable":
+        git("remote", "set-url", "origin", str(tmp_path / "no-such-origin.git"))
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "gh").write_text(f"#!/bin/bash\necho {merged}\n")
+    (bindir / "gh").chmod(0o755)
+    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "CHANNEL": "beta", "PR_NUMBER": "19"}
+    run = subprocess.run(["bash", "-c", f"set -euo pipefail\n{block}"], cwd=tmp_path / "work", env=env, capture_output=True, text=True)
+    left = subprocess.run(["git", "ls-remote", "--heads", str(tmp_path / "origin.git"), "release/beta"], capture_output=True, text=True).stdout
+    return run, "::warning::left release/beta in place" in run.stdout, left.strip() != ""
+
+
+def test_cut_warns_about_the_release_branch_only_while_it_is_still_there(tmp_path):
+    """GitHub may delete the merged branch first (delete_branch_on_merge); a rebuilt or unreachable branch stays, and says so."""
+    for state, warned, left in (("gone", False, False), ("merged", False, False), ("rebuilt", True, True), ("unreachable", True, True)):
+        run, saw_warning, still_there = _retire_release_branch(tmp_path / state, state)
+        assert run.returncode == 0, run.stderr
+        assert (saw_warning, still_there) == (warned, left), f"{state}: warning={saw_warning} branch left={still_there}"
+
+
 def test_merge_changelog_inserts_missing_sections_and_keeps_our_order(tmp_path):
     ours = tmp_path / "ours.md"
     theirs = tmp_path / "theirs.md"
