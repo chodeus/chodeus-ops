@@ -120,7 +120,7 @@ git push -q origin "HEAD:$BASE"
 trap - ERR
 
 # Done with: left behind, its Unreleased would reach the next PR. Delete it only while it is what was merged (a refresh may have
-# rebuilt it for a new PR), and warn only while it is still there: a repo that deletes merged branches already has (ls-remote 2).
+# rebuilt it for a new PR), and warn unless ls-remote confirms it is gone (exit 2), as a repo that deletes merged branches has.
 if [ -n "$PR_NUMBER" ]; then
   { merged_head=$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid) \
     && git push -q --force-with-lease="refs/heads/release/$CHANNEL:$merged_head" origin ":refs/heads/release/$CHANNEL"; } \
