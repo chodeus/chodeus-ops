@@ -1,5 +1,6 @@
 # Caller that removes a pull request's test builds when it closes. Checks out nothing.
 # Mechanics: .github/workflows/unraid-plugin-pr-cleanup.yml.
+# Repo needs Settings > Actions > Policies allowing every event, else pull_request_target is blocked from 2026-12-02.
 
 name: PR cleanup
 
